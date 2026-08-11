@@ -1,13 +1,42 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
+  
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  password  String
+  mailboxes Mailbox[]
+  createdAt DateTime  @default(now())
+}
+
+model Mailbox {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade) // <--- Cambiado a Cascade
+  emailAddress String   @unique
+  apiToken    String
+  aliasName   String?
+  status      String    @default("active")
+  messages    Message[]
+  createdAt   DateTime  @default(now())
+}
+
+model Message {
+  id          String   @id @default(cuid())
+  mailboxId   String
+  mailbox     Mailbox  @relation(fields: [mailboxId], references: [id], onDelete: Cascade) // <--- Cambiado a Cascade
+  messageId   String   @unique
+  from        String
+  subject     String?
+  bodyHtml    String?
+  bodyText    String?
+  hasAttachments Boolean @default(false)
+  receivedAt  DateTime
+  createdAt   DateTime @default(now())
 }
