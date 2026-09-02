@@ -3,7 +3,11 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getMailboxMessages, syncMailbox } from "@/actions/mailbox.actions";
+import {
+  getMailboxMessages,
+  syncMailbox,
+  deleteMailbox,
+} from "@/actions/mailbox.actions";
 
 interface Message {
   id: string;
@@ -26,6 +30,7 @@ export default function MailboxDetailPage() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Cargar mensajes al montar la página
   useEffect(() => {
@@ -68,6 +73,29 @@ export default function MailboxDetailPage() {
       setError("Error inesperado al sincronizar");
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleDeleteThisMailbox = async () => {
+    if (
+      !confirm(
+        `¿Estás seguro de que quieres eliminar este buzón y todos sus mensajes?`,
+      )
+    ) {
+      return;
+    }
+    try {
+      setDeleting(true);
+      const result = await deleteMailbox(mailboxId);
+      if (result.success) {
+        router.push("/dashboard"); // Redirige al Dashboard
+      } else {
+        setError(result.error || "Error al eliminar");
+      }
+    } catch {
+      setError("Error inesperado al eliminar");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -135,6 +163,13 @@ export default function MailboxDetailPage() {
             ) : (
               "🔄 Refrescar este buzón"
             )}
+          </button>
+          <button
+            onClick={handleDeleteThisMailbox}
+            disabled={deleting}
+            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {deleting ? "⏳ Eliminando..." : "🗑️ Eliminar buzón"}
           </button>
         </div>
 

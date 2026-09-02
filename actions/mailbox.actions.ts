@@ -428,3 +428,74 @@ export async function downloadAttachment(messageId: string, mailboxId: string) {
     return new Response(`Error: ${error.message}`, { status: 500 });
   }
 }
+
+// actions/mailbox.actions.ts
+
+// --- Eliminar un buzón completo ---
+export async function deleteMailbox(mailboxId: string) {
+  try {
+    // 1. Verificar autenticación
+    const user = await getCurrentUser();
+    if (!user) {
+      return { success: false, error: "No autenticado" };
+    }
+
+    // 2. Verificar que el mailbox pertenezca al usuario
+    const mailbox = await prisma.mailbox.findFirst({
+      where: {
+        id: mailboxId,
+        userId: user.id,
+      },
+    });
+
+    if (!mailbox) {
+      return { success: false, error: "Correo no encontrado o no autorizado" };
+    }
+
+    // 3. (Opcional) Intentar eliminar la cuenta en mail.tm
+    try {
+      // Obtener el ID de la cuenta desde el endpoint /me
+      const meResponse = await fetch("https://api.mail.tm/me", {
+        headers: {
+          Authorization: `Bearer ${mailbox.apiToken}`,
+        },
+      });
+
+      if (meResponse.ok) {
+        const meData = await meResponse.json();
+        const accountId = meData.id;
+
+        if (accountId) {
+          // Eliminar la cuenta en mail.tm
+          await fetch(`https://api.mail.tm/accounts/${accountId}`, {
+            method: "DELETE",
+            headers: {
+              Authorization: `Bearer ${mailbox.apiToken}`,
+            },
+          });
+        }
+      }
+    } catch (mailTmError) {
+      // Si falla la eliminación en mail.tm, solo lo registramos
+      // y continuamos con la eliminación local (el correo temporal caducará solo)
+      console.error(
+        "Error eliminando de mail.tm (continuando localmente):",
+        mailTmError,
+      );
+    }
+
+    // 4. Eliminar de la base de datos local (Prisma eliminará los mensajes en cascada)
+    await prisma.mailbox.delete({
+      where: { id: mailboxId },
+    });
+
+    // 5. Revalidar rutas para actualizar la UI
+    revalidatePath("/dashboard");
+    revalidatePath(`/dashboard/${mailboxId}`);
+
+    return { success: true, message: "Buzón eliminado correctamente" };
+  } catch (error: any) {
+    console.error("Error eliminando buzón:", error);
+    return { success: false, error: error.message };
+  }
+}
