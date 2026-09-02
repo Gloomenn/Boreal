@@ -154,3 +154,183 @@ export async function getMailboxMessages(mailboxId: string) {
     return { success: false, error: error.message };
   }
 }
+
+// actions/mailbox.actions.ts
+
+// --- Sincronizar un mailbox específico (descargar mensajes de mail.tm) ---
+
+
+// actions/mailbox.actions.ts
+
+export async function syncMailbox(mailboxId: string) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return { success: false, error: "No autenticado" };
+    }
+
+    const mailbox = await prisma.mailbox.findFirst({
+      where: {
+        id: mailboxId,
+        userId: user.id,
+        status: "active",
+      },
+    });
+
+    if (!mailbox) {
+      return { success: false, error: "Correo no encontrado o no autorizado" };
+    }
+
+    // Obtener la lista de mensajes (resumen)
+    const listResponse = await fetch("https://api.mail.tm/messages", {
+      headers: {
+        Authorization: `Bearer ${mailbox.apiToken}`,
+      },
+    });
+
+    if (!listResponse.ok) {
+      throw new Error(`Error al obtener mensajes: ${listResponse.statusText}`);
+    }
+
+    const data = await listResponse.json();
+    const messages = data["hydra:member"] || [];
+
+    let savedCount = 0;
+
+    for (const msgSummary of messages) {
+      const existing = await prisma.message.findUnique({
+        where: { messageId: msgSummary.id },
+      });
+
+      if (!existing) {
+        // Obtener el detalle completo del mensaje
+        const detailResponse = await fetch(
+          `https://api.mail.tm/messages/${msgSummary.id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${mailbox.apiToken}`,
+            },
+          }
+        );
+
+        if (!detailResponse.ok) {
+          console.error(
+            `Error al obtener detalle del mensaje ${msgSummary.id}:`,
+            detailResponse.statusText
+          );
+          // Guardar al menos el resumen (sin detalle completo)
+          await prisma.message.create({
+            data: {
+              mailboxId: mailbox.id,
+              messageId: msgSummary.id,
+              from: msgSummary.from?.address || "Desconocido",
+              subject: msgSummary.subject || "Sin asunto",
+              bodyText: msgSummary.text || msgSummary.intro || "",
+              bodyHtml: typeof msgSummary.html === 'string' ? msgSummary.html : null,
+              hasAttachments: !!(msgSummary.attachments && msgSummary.attachments.length > 0),
+              receivedAt: new Date(msgSummary.createdAt),
+            },
+          });
+          savedCount++;
+          continue;
+        }
+
+        const msgDetail = await detailResponse.json();
+
+        // 🔥 1. Asegurar que bodyHtml sea string o null (no array)
+        let htmlContent: string | null = null;
+        if (msgDetail.html) {
+          if (Array.isArray(msgDetail.html)) {
+            // Si es array, unirlo en un solo string
+            htmlContent = msgDetail.html.join('');
+          } else if (typeof msgDetail.html === 'string') {
+            htmlContent = msgDetail.html;
+          }
+        }
+
+        // 🔥 2. Determinar si tiene adjuntos correctamente
+        const hasAttachments = !!(msgDetail.attachments && msgDetail.attachments.length > 0);
+
+        // Guardar el mensaje completo
+        await prisma.message.create({
+          data: {
+            mailboxId: mailbox.id,
+            messageId: msgDetail.id,
+            from: msgDetail.from?.address || "Desconocido",
+            subject: msgDetail.subject || "Sin asunto",
+            bodyText: msgDetail.text || msgDetail.intro || "",
+            bodyHtml: htmlContent,
+            hasAttachments: hasAttachments,
+            receivedAt: new Date(msgDetail.createdAt),
+          },
+        });
+        savedCount++;
+      }
+    }
+
+    revalidatePath("/dashboard");
+    revalidatePath(`/dashboard/${mailboxId}`);
+
+    return {
+      success: true,
+      saved: savedCount,
+      total: messages.length,
+      mailbox: mailbox.emailAddress,
+    };
+  } catch (error: any) {
+    console.error("Error sincronizando mailbox:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// --- Sincronizar TODOS los mailboxes del usuario autenticado ---
+export async function syncAllMailboxes() {
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return { success: false, error: "No autenticado" };
+    }
+
+    // Obtener todos los mailboxes activos del usuario
+    const mailboxes = await prisma.mailbox.findMany({
+      where: {
+        userId: user.id,
+        status: "active",
+      },
+      select: {
+        id: true,
+        emailAddress: true,
+      },
+    });
+
+    if (mailboxes.length === 0) {
+      return { success: true, message: "No hay correos para sincronizar" };
+    }
+
+    // Sincronizar cada mailbox en paralelo (para ser más rápido)
+    const results = await Promise.all(
+      mailboxes.map(async (mb) => {
+        const result = await syncMailbox(mb.id);
+        return {
+          email: mb.emailAddress,
+          ...result,
+        };
+      })
+    );
+
+    const totalSaved = results.reduce((sum, r) => sum + (r.saved || 0), 0);
+    const totalErrors = results.filter((r) => !r.success).length;
+
+    revalidatePath("/dashboard");
+
+    return {
+      success: true,
+      message: `Sincronización completada. ${totalSaved} mensajes nuevos guardados.`,
+      details: results,
+      errors: totalErrors,
+    };
+  } catch (error: any) {
+    console.error("Error sincronizando todos los mailboxes:", error);
+    return { success: false, error: error.message };
+  }
+}
