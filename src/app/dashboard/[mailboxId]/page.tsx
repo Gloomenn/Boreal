@@ -71,6 +71,37 @@ export default function MailboxDetailPage() {
     }
   };
 
+  // app/dashboard/[mailboxId]/page.tsx
+
+  const handleDownload = async (messageId: string) => {
+    try {
+      const response = await fetch(`/api/download/${mailboxId}/${messageId}`);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "Error al descargar");
+      }
+
+      const contentDisposition = response.headers.get("Content-Disposition");
+      let fileName = "adjunto.pdf";
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) fileName = match[1];
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error: any) {
+      setError("Error al descargar el archivo: " + error.message);
+    }
+  };
+
   const formatDate = (date: Date) => {
     return new Date(date).toLocaleString("es-ES", {
       day: "2-digit",
@@ -137,7 +168,8 @@ export default function MailboxDetailPage() {
           <div className="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
             <p className="text-lg">📭 No hay mensajes en este buzón.</p>
             <p className="text-sm mt-2">
-              Envía un correo a esta dirección o haz clic en "Refrescar este buzón".
+              Envía un correo a esta dirección o haz clic en "Refrescar este
+              buzón".
             </p>
           </div>
         ) : (
@@ -171,19 +203,28 @@ export default function MailboxDetailPage() {
 
                 {/* Cuerpo del mensaje */}
                 <div className="mt-3 p-4 bg-gray-50 rounded border border-gray-200 text-sm text-gray-700 max-h-96 overflow-y-auto">
-                  {msg.bodyText ? (
+                  {msg.bodyHtml ? (
+                    <div
+                      className="prose prose-sm max-w-none"
+                      dangerouslySetInnerHTML={{ __html: msg.bodyHtml }}
+                    />
+                  ) : msg.bodyText ? (
                     <div className="whitespace-pre-wrap">{msg.bodyText}</div>
-                  ) : msg.bodyHtml ? (
-                    <div dangerouslySetInnerHTML={{ __html: msg.bodyHtml }} />
                   ) : (
-                    <span className="text-gray-400">(Sin contenido visible)</span>
+                    <span className="text-gray-400">
+                      (Sin contenido visible)
+                    </span>
                   )}
                 </div>
 
-                {/* TODO: Aquí añadiremos la descarga de adjuntos en el siguiente paso */}
                 {msg.hasAttachments && (
-                  <div className="mt-3 text-sm text-gray-500 border-t border-gray-100 pt-3">
-                    📎 Este mensaje tiene archivos adjuntos (próximamente: descarga).
+                  <div className="mt-3 border-t border-gray-100 pt-3">
+                    <button
+                      onClick={() => handleDownload(msg.id)}
+                      className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded hover:bg-blue-200 transition flex items-center gap-2"
+                    >
+                      📎 Descargar adjunto
+                    </button>
                   </div>
                 )}
               </div>

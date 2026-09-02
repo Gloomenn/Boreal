@@ -41,7 +41,9 @@ export async function createTemporaryMailbox(aliasName: string) {
 
     if (!createRes.ok) {
       const errorData = await createRes.json();
-      throw new Error(`mail.tm error: ${errorData.detail || "Error desconocido"}`);
+      throw new Error(
+        `mail.tm error: ${errorData.detail || "Error desconocido"}`,
+      );
     }
 
     // 2. Iniciar sesión en mail.tm para obtener el TOKEN
@@ -72,7 +74,6 @@ export async function createTemporaryMailbox(aliasName: string) {
     revalidatePath("/dashboard");
 
     return { success: true, mailbox: newMailbox };
-
   } catch (error: any) {
     console.error("Error creando mailbox:", error);
     return { success: false, error: error.message };
@@ -159,7 +160,6 @@ export async function getMailboxMessages(mailboxId: string) {
 
 // --- Sincronizar un mailbox específico (descargar mensajes de mail.tm) ---
 
-
 // actions/mailbox.actions.ts
 
 export async function syncMailbox(mailboxId: string) {
@@ -210,13 +210,13 @@ export async function syncMailbox(mailboxId: string) {
             headers: {
               Authorization: `Bearer ${mailbox.apiToken}`,
             },
-          }
+          },
         );
 
         if (!detailResponse.ok) {
           console.error(
             `Error al obtener detalle del mensaje ${msgSummary.id}:`,
-            detailResponse.statusText
+            detailResponse.statusText,
           );
           // Guardar al menos el resumen (sin detalle completo)
           await prisma.message.create({
@@ -226,8 +226,11 @@ export async function syncMailbox(mailboxId: string) {
               from: msgSummary.from?.address || "Desconocido",
               subject: msgSummary.subject || "Sin asunto",
               bodyText: msgSummary.text || msgSummary.intro || "",
-              bodyHtml: typeof msgSummary.html === 'string' ? msgSummary.html : null,
-              hasAttachments: !!(msgSummary.attachments && msgSummary.attachments.length > 0),
+              bodyHtml:
+                typeof msgSummary.html === "string" ? msgSummary.html : null,
+              hasAttachments: !!(
+                msgSummary.attachments && msgSummary.attachments.length > 0
+              ),
               receivedAt: new Date(msgSummary.createdAt),
             },
           });
@@ -242,14 +245,16 @@ export async function syncMailbox(mailboxId: string) {
         if (msgDetail.html) {
           if (Array.isArray(msgDetail.html)) {
             // Si es array, unirlo en un solo string
-            htmlContent = msgDetail.html.join('');
-          } else if (typeof msgDetail.html === 'string') {
+            htmlContent = msgDetail.html.join("");
+          } else if (typeof msgDetail.html === "string") {
             htmlContent = msgDetail.html;
           }
         }
 
         // 🔥 2. Determinar si tiene adjuntos correctamente
-        const hasAttachments = !!(msgDetail.attachments && msgDetail.attachments.length > 0);
+        const hasAttachments = !!(
+          msgDetail.attachments && msgDetail.attachments.length > 0
+        );
 
         // Guardar el mensaje completo
         await prisma.message.create({
@@ -315,7 +320,7 @@ export async function syncAllMailboxes() {
           email: mb.emailAddress,
           ...result,
         };
-      })
+      }),
     );
 
     const totalSaved = results.reduce((sum, r) => sum + (r.saved || 0), 0);
@@ -332,5 +337,94 @@ export async function syncAllMailboxes() {
   } catch (error: any) {
     console.error("Error sincronizando todos los mailboxes:", error);
     return { success: false, error: error.message };
+  }
+}
+
+//descargar
+export async function downloadAttachment(messageId: string, mailboxId: string) {
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return new Response("No autenticado", { status: 401 });
+    }
+
+    const mailbox = await prisma.mailbox.findFirst({
+      where: {
+        id: mailboxId,
+        userId: user.id,
+        status: "active",
+      },
+    });
+
+    if (!mailbox) {
+      return new Response("Buzón no encontrado o no autorizado", {
+        status: 404,
+      });
+    }
+
+    const message = await prisma.message.findFirst({
+      where: {
+        id: messageId,
+        mailboxId: mailboxId,
+      },
+    });
+
+    if (!message) {
+      return new Response("Mensaje no encontrado", { status: 404 });
+    }
+
+    // Obtener detalles del mensaje desde mail.tm
+    const detailResponse = await fetch(
+      `https://api.mail.tm/messages/${message.messageId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${mailbox.apiToken}`,
+        },
+      },
+    );
+
+    if (!detailResponse.ok) {
+      return new Response("Error al obtener detalles del mensaje", {
+        status: 500,
+      });
+    }
+
+    const msgDetail = await detailResponse.json();
+    const attachments = msgDetail.attachments || [];
+
+    if (attachments.length === 0) {
+      return new Response("Este mensaje no tiene adjuntos", { status: 404 });
+    }
+
+    const attachment = attachments[0];
+
+    // 🔥 CORRECCIÓN: Construir URL absoluta si es relativa
+    const baseUrl = "https://api.mail.tm";
+    const fileUrl = attachment.downloadUrl.startsWith("http")
+      ? attachment.downloadUrl
+      : `${baseUrl}${attachment.downloadUrl}`;
+
+    const fileResponse = await fetch(fileUrl, {
+      headers: {
+        Authorization: `Bearer ${mailbox.apiToken}`,
+      },
+    });
+
+    if (!fileResponse.ok) {
+      return new Response("Error al descargar el archivo", { status: 500 });
+    }
+
+    const fileBuffer = await fileResponse.arrayBuffer();
+    const fileName = attachment.filename || "adjunto.pdf";
+
+    return new Response(fileBuffer, {
+      headers: {
+        "Content-Disposition": `attachment; filename="${fileName}"`,
+        "Content-Type": attachment.contentType || "application/octet-stream",
+      },
+    });
+  } catch (error: any) {
+    console.error("Error descargando adjunto:", error);
+    return new Response(`Error: ${error.message}`, { status: 500 });
   }
 }
