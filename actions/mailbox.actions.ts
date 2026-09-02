@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/actions/auth.actions";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { sendTelegramNotification } from "@/lib/notifications";
 
 // --- 1. Función auxiliar para obtener el dominio de mail.tm ---
 async function getMailDomain() {
@@ -234,6 +235,7 @@ export async function syncMailbox(mailboxId: string) {
               receivedAt: new Date(msgSummary.createdAt),
             },
           });
+
           savedCount++;
           continue;
         }
@@ -269,6 +271,18 @@ export async function syncMailbox(mailboxId: string) {
             receivedAt: new Date(msgDetail.createdAt),
           },
         });
+
+        // 🔔 ENVIAR NOTIFICACIÓN
+        const appUrl =
+          process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+        const notificationMessage = `
+          📨 <b>Nuevo correo recibido</b>
+          📌 <b>De:</b> ${msgDetail.from?.address || "Desconocido"}
+          📎 <b>Asunto:</b> ${msgDetail.subject || "Sin asunto"}
+          📝 <b>Resumen:</b> ${(msgDetail.text || msgDetail.intro || "").substring(0, 150)}${(msgDetail.text || "").length > 150 ? "..." : ""}
+          🔗 <a href="${appUrl}/dashboard/${mailboxId}">Ver en la aplicación</a>
+          `;
+        await sendTelegramNotification(notificationMessage);
         savedCount++;
       }
     }
