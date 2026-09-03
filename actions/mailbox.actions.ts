@@ -328,7 +328,7 @@ export async function syncAllMailboxes() {
 
     // Sincronizar cada mailbox en paralelo (para ser más rápido)
     const results = await Promise.all(
-      mailboxes.map(async (mb) => {
+      mailboxes.map(async (mb: { id: string; emailAddress: string }) => {
         const result = await syncMailbox(mb.id);
         return {
           email: mb.emailAddress,
@@ -337,8 +337,11 @@ export async function syncAllMailboxes() {
       }),
     );
 
-    const totalSaved = results.reduce((sum, r) => sum + (r.saved || 0), 0);
-    const totalErrors = results.filter((r) => !r.success).length;
+    const totalSaved = results.reduce(
+      (sum: number, r: any) => sum + (r.saved || 0),
+      0,
+    );
+    const totalErrors = results.filter((r: any) => !r.success).length;
 
     revalidatePath("/dashboard");
 

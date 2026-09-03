@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate && next build",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint"
   },
@@ -32,4 +33,7 @@
     "tailwindcss": "^4",
     "typescript": "^5"
   }
+  
 }
+
+
