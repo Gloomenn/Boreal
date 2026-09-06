@@ -31,7 +31,6 @@ export async function createTemporaryMailbox(aliasName: string) {
 
     // Crear un inbox temporal en MailSlurp
     const inbox = await mailslurp.createInboxWithOptions({
-      expiresIn: 60 * 60 * 1000,
       description: `Buzón para: ${aliasName}`,
     });
 
