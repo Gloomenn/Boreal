@@ -7,81 +7,64 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { sendTelegramNotification } from "@/lib/notifications";
 
-// --- 1. Función auxiliar para obtener el dominio de mail.tm ---
-async function getMailDomain() {
-  const res = await fetch("https://api.mail.tm/domains");
-  const data = await res.json();
-  // Tomamos el primer dominio activo (suele ser "@cliente.mail.tm")
-  return data["hydra:member"][0].domain;
-}
+// ============================================================
+//  CONFIGURACIÓN - MAILSLURP (con any para evitar errores de tipos)
+// ============================================================
 
-// --- 2. Crear un nuevo correo temporal ---
+// Import dinámico para evitar problemas de tipos en tiempo de compilación
+const { MailSlurp } = require("mailslurp-client");
+
+const mailslurp = new MailSlurp({
+  apiKey: process.env.MAILSLURP_API_KEY || "",
+});
+
+// ============================================================
+//  1. CREAR CORREO TEMPORAL
+// ============================================================
+
 export async function createTemporaryMailbox(aliasName: string) {
   try {
-    // Verificar que el usuario esté autenticado
     const user = await getCurrentUser();
     if (!user) {
       redirect("/login");
     }
 
-    // Obtener dominio y generar email aleatorio
-    const domain = await getMailDomain();
-    const randomUser = `tramite_${Math.random().toString(36).substring(2, 10)}`;
-    const fullEmail = `${randomUser}@${domain}`;
-    const password = `Temp${Math.random().toString(36).substring(2, 10)}!`;
-
-    // 1. Llamar a mail.tm para CREAR la cuenta
-    const createRes = await fetch("https://api.mail.tm/accounts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        address: fullEmail,
-        password: password,
-      }),
+    // Crear un inbox temporal en MailSlurp
+    const inbox = await mailslurp.createInboxWithOptions({
+      expiresIn: 60 * 60 * 1000,
+      description: `Buzón para: ${aliasName}`,
     });
 
-    if (!createRes.ok) {
-      const errorData = await createRes.json();
-      throw new Error(
-        `mail.tm error: ${errorData.detail || "Error desconocido"}`,
-      );
-    }
+    const fullEmail = inbox.emailAddress;
+    const inboxId = inbox.id;
 
-    // 2. Iniciar sesión en mail.tm para obtener el TOKEN
-    const loginRes = await fetch("https://api.mail.tm/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        address: fullEmail,
-        password: password,
-      }),
-    });
+    console.log("📧 Correo creado con MailSlurp:", fullEmail);
 
-    const loginData = await loginRes.json();
-    const token = loginData.token;
-
-    // 3. Guardar en NUESTRA base de datos (SQLite)
     const newMailbox = await prisma.mailbox.create({
       data: {
         aliasName: aliasName,
         emailAddress: fullEmail,
-        apiToken: token,
+        apiToken: inboxId,
         userId: user.id,
         status: "active",
       },
     });
 
-    // Revalidamos la ruta para que el frontend se actualice
     revalidatePath("/dashboard");
-
     return { success: true, mailbox: newMailbox };
   } catch (error: any) {
-    console.error("Error creando mailbox:", error);
-    return { success: false, error: error.message };
+    console.error("❌ Error creando mailbox:", error);
+    return {
+      success: false,
+      error: error.message || "Error desconocido al crear el correo",
+    };
   }
 }
 
-// --- 3. Obtener TODOS los correos del usuario autenticado ---
+// ============================================================
+//  2. LISTAR CORREOS DEL USUARIO
+// ============================================================
+
 export async function getMyMailboxes() {
   try {
     const user = await getCurrentUser();
@@ -99,7 +82,7 @@ export async function getMyMailboxes() {
           orderBy: {
             receivedAt: "desc",
           },
-          take: 5, // Solo los 5 últimos para no saturar la vista
+          take: 5,
           select: {
             id: true,
             subject: true,
@@ -116,12 +99,15 @@ export async function getMyMailboxes() {
 
     return { success: true, data: mailboxes };
   } catch (error: any) {
-    console.error("Error obteniendo mailboxes:", error);
+    console.error("❌ Error obteniendo mailboxes:", error);
     return { success: false, error: error.message };
   }
 }
 
-// --- 4. Obtener los mensajes de un correo específico ---
+// ============================================================
+//  3. OBTENER MENSAJES DE UN CORREO
+// ============================================================
+
 export async function getMailboxMessages(mailboxId: string) {
   try {
     const user = await getCurrentUser();
@@ -129,7 +115,6 @@ export async function getMailboxMessages(mailboxId: string) {
       return { success: false, error: "No autenticado" };
     }
 
-    // Verificar que el mailbox pertenezca al usuario (seguridad)
     const mailbox = await prisma.mailbox.findFirst({
       where: {
         id: mailboxId,
@@ -152,16 +137,14 @@ export async function getMailboxMessages(mailboxId: string) {
 
     return { success: true, data: messages };
   } catch (error: any) {
-    console.error("Error obteniendo mensajes:", error);
+    console.error("❌ Error obteniendo mensajes:", error);
     return { success: false, error: error.message };
   }
 }
 
-// actions/mailbox.actions.ts
-
-// --- Sincronizar un mailbox específico (descargar mensajes de mail.tm) ---
-
-// actions/mailbox.actions.ts
+// ============================================================
+//  4. SINCRONIZAR UN CORREO
+// ============================================================
 
 export async function syncMailbox(mailboxId: string) {
   try {
@@ -182,108 +165,207 @@ export async function syncMailbox(mailboxId: string) {
       return { success: false, error: "Correo no encontrado o no autorizado" };
     }
 
-    // Obtener la lista de mensajes (resumen)
-    const listResponse = await fetch("https://api.mail.tm/messages", {
-      headers: {
-        Authorization: `Bearer ${mailbox.apiToken}`,
-      },
-    });
+    const inboxId = mailbox.apiToken;
+    console.log("📡 Sincronizando inbox:", inboxId);
 
-    if (!listResponse.ok) {
-      throw new Error(`Error al obtener mensajes: ${listResponse.statusText}`);
+    let emails: any[] = [];
+
+    // Intentar obtener los emails con el SDK de MailSlurp
+    try {
+      emails = await mailslurp.getEmails(inboxId);
+      console.log("✅ mailslurp.getEmails(inboxId) funcionó");
+    } catch (error1) {
+      console.warn("⚠️ Falló mailslurp.getEmails(inboxId):", error1);
+      try {
+        const response = await fetch(
+          `https://api.mailslurp.com/inboxes/${inboxId}/emails`,
+          {
+            headers: {
+              "x-api-key": process.env.MAILSLURP_API_KEY || "",
+            },
+          },
+        );
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        emails = data.content || data || [];
+        console.log("✅ Llamada directa a la API funcionó");
+      } catch (error2) {
+        console.error("❌ Falló la sincronización:", error2);
+        throw new Error(
+          "No se pudo obtener la lista de emails. Revisa la API Key de MailSlurp.",
+        );
+      }
     }
 
-    const data = await listResponse.json();
-    const messages = data["hydra:member"] || [];
+    if (!emails || emails.length === 0) {
+      console.log("📭 No hay mensajes nuevos en este buzón");
+      return {
+        success: true,
+        saved: 0,
+        total: 0,
+        mailbox: mailbox.emailAddress,
+      };
+    }
+
+    console.log(
+      `📨 Encontrados ${emails.length} mensajes en ${mailbox.emailAddress}`,
+    );
 
     let savedCount = 0;
 
-    for (const msgSummary of messages) {
+    for (const emailSummary of emails) {
       const existing = await prisma.message.findUnique({
-        where: { messageId: msgSummary.id },
+        where: { messageId: emailSummary.id },
       });
 
-      if (!existing) {
-        // Obtener el detalle completo del mensaje
-        const detailResponse = await fetch(
-          `https://api.mail.tm/messages/${msgSummary.id}`,
-          {
-            headers: {
-              Authorization: `Bearer ${mailbox.apiToken}`,
-            },
-          },
-        );
+      // Si el mensaje ya existe y no está vacío, lo omitimos.
+      // Si el mensaje existía pero quedó guardado como "Sin contenido" o sin HTML, lo re-procesamos para actualizarlo.
+      const isExistingEmpty =
+        existing &&
+        (!existing.bodyText ||
+          existing.bodyText === "Sin contenido" ||
+          !existing.bodyHtml);
 
-        if (!detailResponse.ok) {
+      if (!existing || isExistingEmpty) {
+        let fullEmail: any = null;
+
+        // Obtener el email completo usando el SDK de MailSlurp
+        try {
+          fullEmail = await mailslurp.getEmail(emailSummary.id);
+        } catch (getError) {
+          console.warn("⚠️ Error al obtener detalle del email:", getError);
+        }
+
+        if (!fullEmail) {
           console.error(
-            `Error al obtener detalle del mensaje ${msgSummary.id}:`,
-            detailResponse.statusText,
+            `❌ Error al obtener detalle del email ${emailSummary.id}`,
           );
-          // Guardar al menos el resumen (sin detalle completo)
-          await prisma.message.create({
-            data: {
-              mailboxId: mailbox.id,
-              messageId: msgSummary.id,
-              from: msgSummary.from?.address || "Desconocido",
-              subject: msgSummary.subject || "Sin asunto",
-              bodyText: msgSummary.text || msgSummary.intro || "",
-              bodyHtml:
-                typeof msgSummary.html === "string" ? msgSummary.html : null,
-              hasAttachments: !!(
-                msgSummary.attachments && msgSummary.attachments.length > 0
-              ),
-              receivedAt: new Date(msgSummary.createdAt),
-            },
-          });
-
-          savedCount++;
           continue;
         }
 
-        const msgDetail = await detailResponse.json();
+        // 🔥 EXTRACCIÓN MEJORADA DEL CONTENIDO
+        let bodyText = "";
+        let bodyHtml = "";
 
-        // 🔥 1. Asegurar que bodyHtml sea string o null (no array)
-        let htmlContent: string | null = null;
-        if (msgDetail.html) {
-          if (Array.isArray(msgDetail.html)) {
-            // Si es array, unirlo en un solo string
-            htmlContent = msgDetail.html.join("");
-          } else if (typeof msgDetail.html === "string") {
-            htmlContent = msgDetail.html;
+        const rawBody =
+          typeof fullEmail.body === "string" ? fullEmail.body : "";
+        const isHtml =
+          fullEmail.isHTML === true || /<[a-z][\s\S]*>/i.test(rawBody);
+
+        if (isHtml) {
+          bodyHtml =
+            rawBody ||
+            (typeof fullEmail.html === "string" ? fullEmail.html : "");
+          bodyText =
+            fullEmail.textExcerpt ||
+            fullEmail.bodyExcerpt ||
+            bodyHtml
+              .replace(/<[^>]*>/g, " ")
+              .replace(/\s+/g, " ")
+              .trim();
+        } else {
+          bodyText =
+            rawBody ||
+            fullEmail.textBody ||
+            fullEmail.text ||
+            fullEmail.bodyExcerpt ||
+            "";
+          bodyHtml =
+            (typeof fullEmail.html === "string" ? fullEmail.html : "") ||
+            (bodyText ? bodyText.replace(/\n/g, "<br>") : "");
+        }
+
+        // Respaldos si alguno sigue vacío
+        if (!bodyHtml && bodyText) {
+          bodyHtml = bodyText.replace(/\n/g, "<br>");
+        }
+        if (!bodyText && bodyHtml) {
+          bodyText = bodyHtml
+            .replace(/<[^>]*>/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+
+        console.log(
+          `📝 Contenido extraído: ${bodyText.length} caracteres de texto, ${bodyHtml.length} caracteres de HTML`,
+        );
+
+        // Obtener el remitente
+        let from = "Desconocido";
+        if (fullEmail.from) {
+          if (typeof fullEmail.from === "string") {
+            from = fullEmail.from;
+          } else if (fullEmail.from.address) {
+            from = fullEmail.from.address;
+          } else if (fullEmail.from.emailAddress) {
+            from = fullEmail.from.emailAddress;
+          }
+        } else if (emailSummary.from) {
+          if (typeof emailSummary.from === "string") {
+            from = emailSummary.from;
+          } else if (emailSummary.from.address) {
+            from = emailSummary.from.address;
           }
         }
 
-        // 🔥 2. Determinar si tiene adjuntos correctamente
-        const hasAttachments = !!(
-          msgDetail.attachments && msgDetail.attachments.length > 0
-        );
+        // Verificar si tiene adjuntos
+        const hasAttachments =
+          Array.isArray(fullEmail.attachments) &&
+          fullEmail.attachments.length > 0;
 
-        // Guardar el mensaje completo
-        await prisma.message.create({
-          data: {
-            mailboxId: mailbox.id,
-            messageId: msgDetail.id,
-            from: msgDetail.from?.address || "Desconocido",
-            subject: msgDetail.subject || "Sin asunto",
-            bodyText: msgDetail.text || msgDetail.intro || "",
-            bodyHtml: htmlContent,
-            hasAttachments: hasAttachments,
-            receivedAt: new Date(msgDetail.createdAt),
-          },
-        });
+        if (existing) {
+          // Actualizar mensaje previamente incompleto
+          await prisma.message.update({
+            where: { id: existing.id },
+            data: {
+              from: from || "Desconocido",
+              subject:
+                fullEmail.subject || emailSummary.subject || "Sin asunto",
+              bodyText: bodyText || "Sin contenido",
+              bodyHtml: bodyHtml || bodyText || "",
+              hasAttachments: hasAttachments,
+            },
+          });
+          savedCount++;
+        } else {
+          // Crear nuevo mensaje
+          await prisma.message.create({
+            data: {
+              mailboxId: mailbox.id,
+              messageId: fullEmail.id || emailSummary.id,
+              from: from || "Desconocido",
+              subject:
+                fullEmail.subject || emailSummary.subject || "Sin asunto",
+              bodyText: bodyText || "Sin contenido",
+              bodyHtml: bodyHtml || bodyText || "",
+              hasAttachments: hasAttachments,
+              receivedAt: new Date(
+                fullEmail.createdAt || emailSummary.createdAt || Date.now(),
+              ),
+            },
+          });
 
-        // 🔔 ENVIAR NOTIFICACIÓN
-        const appUrl =
-          process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-        const notificationMessage = `
-          📨 <b>Nuevo correo recibido</b>
-          📌 <b>De:</b> ${msgDetail.from?.address || "Desconocido"}
-          📎 <b>Asunto:</b> ${msgDetail.subject || "Sin asunto"}
-          📝 <b>Resumen:</b> ${(msgDetail.text || msgDetail.intro || "").substring(0, 150)}${(msgDetail.text || "").length > 150 ? "..." : ""}
-          🔗 <a href="${appUrl}/dashboard/${mailboxId}">Ver en la aplicación</a>
-          `;
-        await sendTelegramNotification(notificationMessage);
-        savedCount++;
+          // Notificación por Telegram para mensajes nuevos
+          try {
+            const appUrl =
+              process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+            const notificationMessage = `
+📨 <b>Nuevo correo recibido</b>
+📌 <b>De:</b> ${from || "Desconocido"}
+📎 <b>Asunto:</b> ${fullEmail.subject || emailSummary.subject || "Sin asunto"}
+${hasAttachments ? "📎 <b>Adjuntos:</b> Sí" : ""}
+📝 <b>Contenido:</b> ${(bodyText || "").substring(0, 200)}${(bodyText || "").length > 200 ? "..." : ""}
+🔗 <a href="${appUrl}/dashboard/${mailboxId}">Ver en la aplicación</a>`;
+
+            await sendTelegramNotification(notificationMessage);
+          } catch (notifError) {
+            console.warn("Error enviando notificación:", notifError);
+          }
+
+          savedCount++;
+        }
       }
     }
 
@@ -293,27 +375,22 @@ export async function syncMailbox(mailboxId: string) {
     return {
       success: true,
       saved: savedCount,
-      total: messages.length,
+      total: emails.length,
       mailbox: mailbox.emailAddress,
     };
   } catch (error: any) {
-    console.error("Error sincronizando mailbox:", error);
+    console.error("❌ Error sincronizando mailbox:", error);
     return { success: false, error: error.message };
   }
 }
+// ============================================================
+//  5. SINCRONIZAR TODOS LOS CORREOS
+// ============================================================
 
-// --- Sincronizar TODOS los mailboxes del usuario autenticado ---
-export async function syncAllMailboxes() {
+export async function syncAllMailboxesInternal() {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "No autenticado" };
-    }
-
-    // Obtener todos los mailboxes activos del usuario
     const mailboxes = await prisma.mailbox.findMany({
       where: {
-        userId: user.id,
         status: "active",
       },
       select: {
@@ -326,7 +403,6 @@ export async function syncAllMailboxes() {
       return { success: true, message: "No hay correos para sincronizar" };
     }
 
-    // Sincronizar cada mailbox en paralelo (para ser más rápido)
     const results = await Promise.all(
       mailboxes.map(async (mb: { id: string; emailAddress: string }) => {
         const result = await syncMailbox(mb.id);
@@ -352,12 +428,29 @@ export async function syncAllMailboxes() {
       errors: totalErrors,
     };
   } catch (error: any) {
-    console.error("Error sincronizando todos los mailboxes:", error);
+    console.error("❌ Error sincronizando todos los mailboxes:", error);
     return { success: false, error: error.message };
   }
 }
 
-//descargar
+export async function syncAllMailboxes() {
+  try {
+    const user = await getCurrentUser();
+    if (!user) {
+      return { success: false, error: "No autenticado" };
+    }
+
+    return await syncAllMailboxesInternal();
+  } catch (error: any) {
+    console.error("❌ Error sincronizando todos los mailboxes:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================
+//  6. DESCARGAR ADJUNTO
+// ============================================================
+
 export async function downloadAttachment(messageId: string, mailboxId: string) {
   try {
     const user = await getCurrentUser();
@@ -390,74 +483,70 @@ export async function downloadAttachment(messageId: string, mailboxId: string) {
       return new Response("Mensaje no encontrado", { status: 404 });
     }
 
-    // Obtener detalles del mensaje desde mail.tm
-    const detailResponse = await fetch(
-      `https://api.mail.tm/messages/${message.messageId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${mailbox.apiToken}`,
-        },
-      },
-    );
+    // Obtener el email completo usando el SDK de MailSlurp
+    const fullEmail = await mailslurp.getEmail(message.messageId);
 
-    if (!detailResponse.ok) {
-      return new Response("Error al obtener detalles del mensaje", {
+    if (
+      !fullEmail ||
+      !Array.isArray(fullEmail.attachments) ||
+      fullEmail.attachments.length === 0
+    ) {
+      return new Response("Este mensaje no tiene adjuntos", { status: 404 });
+    }
+
+    const attachmentId = fullEmail.attachments[0];
+
+    let fileName = "adjunto.pdf";
+    let contentType = "application/octet-stream";
+
+    try {
+      const meta = await mailslurp.emailController.getAttachmentMetaData({
+        attachmentId,
+        emailId: message.messageId,
+      });
+      if (meta?.name) fileName = meta.name;
+      if (meta?.contentType) contentType = meta.contentType;
+    } catch (metaErr) {
+      console.warn("⚠️ No se pudo obtener metadatos del adjunto:", metaErr);
+    }
+
+    const downloadDto =
+      await mailslurp.emailController.downloadAttachmentBase64({
+        attachmentId,
+        emailId: message.messageId,
+      });
+
+    if (!downloadDto || !downloadDto.base64FileContents) {
+      return new Response("Error al descargar el contenido del adjunto", {
         status: 500,
       });
     }
 
-    const msgDetail = await detailResponse.json();
-    const attachments = msgDetail.attachments || [];
-
-    if (attachments.length === 0) {
-      return new Response("Este mensaje no tiene adjuntos", { status: 404 });
-    }
-
-    const attachment = attachments[0];
-
-    // 🔥 CORRECCIÓN: Construir URL absoluta si es relativa
-    const baseUrl = "https://api.mail.tm";
-    const fileUrl = attachment.downloadUrl.startsWith("http")
-      ? attachment.downloadUrl
-      : `${baseUrl}${attachment.downloadUrl}`;
-
-    const fileResponse = await fetch(fileUrl, {
-      headers: {
-        Authorization: `Bearer ${mailbox.apiToken}`,
-      },
-    });
-
-    if (!fileResponse.ok) {
-      return new Response("Error al descargar el archivo", { status: 500 });
-    }
-
-    const fileBuffer = await fileResponse.arrayBuffer();
-    const fileName = attachment.filename || "adjunto.pdf";
+    const fileBuffer = Buffer.from(downloadDto.base64FileContents, "base64");
 
     return new Response(fileBuffer, {
       headers: {
-        "Content-Disposition": `attachment; filename="${fileName}"`,
-        "Content-Type": attachment.contentType || "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${encodeURIComponent(fileName)}"`,
+        "Content-Type": downloadDto.contentType || contentType,
       },
     });
   } catch (error: any) {
-    console.error("Error descargando adjunto:", error);
+    console.error("❌ Error descargando adjunto:", error);
     return new Response(`Error: ${error.message}`, { status: 500 });
   }
 }
 
-// actions/mailbox.actions.ts
+// ============================================================
+//  7. ELIMINAR BUZÓN
+// ============================================================
 
-// --- Eliminar un buzón completo ---
 export async function deleteMailbox(mailboxId: string) {
   try {
-    // 1. Verificar autenticación
     const user = await getCurrentUser();
     if (!user) {
       return { success: false, error: "No autenticado" };
     }
 
-    // 2. Verificar que el mailbox pertenezca al usuario
     const mailbox = await prisma.mailbox.findFirst({
       where: {
         id: mailboxId,
@@ -469,50 +558,25 @@ export async function deleteMailbox(mailboxId: string) {
       return { success: false, error: "Correo no encontrado o no autorizado" };
     }
 
-    // 3. (Opcional) Intentar eliminar la cuenta en mail.tm
     try {
-      // Obtener el ID de la cuenta desde el endpoint /me
-      const meResponse = await fetch("https://api.mail.tm/me", {
-        headers: {
-          Authorization: `Bearer ${mailbox.apiToken}`,
-        },
-      });
-
-      if (meResponse.ok) {
-        const meData = await meResponse.json();
-        const accountId = meData.id;
-
-        if (accountId) {
-          // Eliminar la cuenta en mail.tm
-          await fetch(`https://api.mail.tm/accounts/${accountId}`, {
-            method: "DELETE",
-            headers: {
-              Authorization: `Bearer ${mailbox.apiToken}`,
-            },
-          });
-        }
-      }
-    } catch (mailTmError) {
-      // Si falla la eliminación en mail.tm, solo lo registramos
-      // y continuamos con la eliminación local (el correo temporal caducará solo)
+      const inboxId = mailbox.apiToken;
+      await mailslurp.deleteInbox(inboxId);
+      console.log(`🗑️ Inbox eliminado de MailSlurp: ${mailbox.emailAddress}`);
+    } catch (deleteError) {
       console.error(
-        "Error eliminando de mail.tm (continuando localmente):",
-        mailTmError,
+        "Error eliminando de MailSlurp (continuando localmente):",
+        deleteError,
       );
     }
 
-    // 4. Eliminar de la base de datos local (Prisma eliminará los mensajes en cascada)
     await prisma.mailbox.delete({
       where: { id: mailboxId },
     });
 
-    // 5. Revalidar rutas para actualizar la UI
     revalidatePath("/dashboard");
-    revalidatePath(`/dashboard/${mailboxId}`);
-
     return { success: true, message: "Buzón eliminado correctamente" };
   } catch (error: any) {
-    console.error("Error eliminando buzón:", error);
+    console.error("❌ Error eliminando buzón:", error);
     return { success: false, error: error.message };
   }
 }

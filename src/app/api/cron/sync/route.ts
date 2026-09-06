@@ -1,6 +1,6 @@
 // app/api/cron/sync/route.ts
 import { NextRequest } from "next/server";
-import { syncAllMailboxes } from "@/actions/mailbox.actions";
+import { syncAllMailboxesInternal } from "@/actions/mailbox.actions";
 
 // 🔐 Clave secreta para proteger el endpoint (ponla en .env.local)
 const CRON_SECRET =
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
 
   try {
     // 2. Ejecutar la sincronización de todos los buzones
-    const result = await syncAllMailboxes();
+    const result = await syncAllMailboxesInternal();
 
     if (result.success) {
       return new Response(

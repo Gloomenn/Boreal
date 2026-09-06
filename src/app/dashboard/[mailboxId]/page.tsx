@@ -236,21 +236,42 @@ export default function MailboxDetailPage() {
                   </div>
                 </div>
 
-                {/* Cuerpo del mensaje */}
-                <div className="mt-3 p-4 bg-gray-50 rounded border border-gray-200 text-sm text-gray-700 max-h-96 overflow-y-auto">
-                  {msg.bodyHtml ? (
+                {/* Cuerpo del mensaje - VISTA HTML */}
+                {msg.bodyHtml && (
+                  <div className="mb-4">
+                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                      📄 Contenido del mensaje
+                    </h4>
                     <div
-                      className="prose prose-sm max-w-none"
-                      dangerouslySetInnerHTML={{ __html: msg.bodyHtml }}
+                      className="prose prose-sm max-w-none bg-white p-4 rounded border border-gray-200 overflow-auto max-h-96"
+                      dangerouslySetInnerHTML={{
+                        __html: msg.bodyHtml.replace(
+                          /<img[^>]+src="http:/g,
+                          '<img src="http:',
+                        ),
+                      }}
                     />
-                  ) : msg.bodyText ? (
-                    <div className="whitespace-pre-wrap">{msg.bodyText}</div>
-                  ) : (
-                    <span className="text-gray-400">
-                      (Sin contenido visible)
-                    </span>
-                  )}
-                </div>
+                  </div>
+                )}
+
+                {/* Vista de texto plano (si no hay HTML o como respaldo) */}
+                {!msg.bodyHtml && msg.bodyText && (
+                  <div className="mb-4">
+                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                      📝 Texto plano
+                    </h4>
+                    <div className="bg-white p-4 rounded border border-gray-200 text-sm text-gray-700 whitespace-pre-wrap font-mono max-h-96 overflow-auto">
+                      {msg.bodyText}
+                    </div>
+                  </div>
+                )}
+
+                {/* Si no hay contenido */}
+                {!msg.bodyHtml && !msg.bodyText && (
+                  <div className="text-sm text-gray-400 italic">
+                    (Sin contenido visible)
+                  </div>
+                )}
 
                 {msg.hasAttachments && (
                   <div className="mt-3 border-t border-gray-100 pt-3">
