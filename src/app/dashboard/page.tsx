@@ -141,16 +141,16 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-black">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-stone-950 shadow-sm   sticky top-0 z-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-800">
-            📬 Gestor de Trámites
+          <h1 className="text-3xl font-sans font-bold text-purple-600">
+            Boreal
           </h1>
           <button
             onClick={handleLogout}
-            className="px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 transition font-medium"
+            className="px-4 py-2 text-sm border border-red-600 text-white rounded-md hover:bg-red-900 transition font-medium"
           >
             Cerrar Sesión
           </button>
@@ -165,7 +165,7 @@ export default function DashboardPage() {
           </div>
         )}
         {error && (
-          <div className="mb-6 p-4 bg-red-100 text-red-700 rounded-lg border border-red-300">
+          <div className="mb-6 p-4 bg-red-100 text-red-700 rounded-lg border border-red-600">
             ❌ {error}
           </div>
         )}
@@ -176,57 +176,60 @@ export default function DashboardPage() {
         )}
 
         {/* Formulario de creación */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-700 mb-4">
-            🆕 Crear nuevo correo temporal
+        <div className="bg-stone-950 rounded-lg shadow-md p-6 mb-8">
+          <h2 className="text-lg font-semibold text-neutral-100 mb-4">
+            <span className="material-symbols-outlined ">add_diamond</span>
+            {"   "}
+            Crear nuevo correo temporal
           </h2>
           <div className="flex flex-col sm:flex-row gap-4">
             <input
               type="text"
               value={aliasName}
               onChange={(e) => setAliasName(e.target.value)}
-              placeholder="Ej: Trámite del coche, Banco..."
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700"
+              placeholder="Ej: CURP, RFC, Nombre..."
+              className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-neutral-100"
               disabled={creating}
             />
             <button
               onClick={handleCreateMailbox}
               disabled={creating}
-              className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              className="px-6 py-2 border border-purple-600 text-white rounded-md hover:bg-purple-900 transition disabled:opacity-50 disabled:cursor-not-allowed font-medium"
             >
-              {creating ? "⏳ Creando..." : "🚀 Crear Correo"}
+              {creating ? "⏳ Creando..." : "Crear Correo"}
             </button>
           </div>
         </div>
 
         {/* Lista de correos con botón de sincronización */}
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold text-gray-700">
-            📧 Mis correos temporales ({mailboxes.length})
+          <h2 className="text-lg font-semibold text-neutral-100">
+            <span className="material-symbols-outlined">alternate_email</span>{" "}
+            Mis correos temporales ({mailboxes.length})
           </h2>
           <button
             onClick={handleSyncAll}
             disabled={syncing}
-            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-4 py-2 border border-green-600 text-white rounded-md hover:bg-green-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {syncing ? (
               <>
                 <span className="animate-spin">⏳</span> Sincronizando...
               </>
             ) : (
-              "🔄 Comprobar nuevos correos"
+              "Comprobar nuevos correos"
             )}
           </button>
         </div>
 
         {/* Lista de correos */}
         {loading ? (
-          <div className="text-center py-12 text-gray-500 bg-white rounded-lg shadow-md">
+          <div className="text-center py-12 text-gray-500 bg-stone-950 rounded-lg shadow-md">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
             Cargando...
           </div>
         ) : mailboxes.length === 0 ? (
-          <div className="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
+          <div className="bg-stone-950 rounded-lg shadow-md p-12 text-center text-gray-500">
             <p className="text-lg">📭 No tienes correos temporales aún.</p>
           </div>
         ) : (
@@ -234,24 +237,24 @@ export default function DashboardPage() {
             {mailboxes.map((mailbox) => (
               <div
                 key={mailbox.id}
-                className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition border border-gray-100"
+                className="bg-stone-950 rounded-lg shadow-md p-6 hover:shadow-lg transition border border-gray-100"
               >
                 <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                   <div>
-                    <h3 className="font-semibold text-gray-800">
+                    <h3 className="font-semibold text-white">
                       {mailbox.aliasName || "Sin nombre"}
                     </h3>
-                    <p className="text-sm text-gray-600 font-mono">
+                    <p className="text-sm text-gray-400 font-mono">
                       {mailbox.emailAddress}
                     </p>
-                    <p className="text-xs text-gray-400">
+                    <p className="text-xs text-gray-500">
                       Creado: {mailbox.createdAt.toLocaleDateString()}
                     </p>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <button
                       onClick={() => router.push(`/dashboard/${mailbox.id}`)}
-                      className="text-blue-600 hover:text-blue-800 text-sm font-medium whitespace-nowrap"
+                      className="text-blue-600 hover:bg-blue-900 hover:text-white text-sm font-medium whitespace-nowrap mr-1 rounded-md p-2 border border-blue-600"
                     >
                       Ver mensajes →
                     </button>
@@ -260,16 +263,16 @@ export default function DashboardPage() {
                         handleDeleteMailbox(mailbox.id, mailbox.aliasName)
                       }
                       disabled={deletingId === mailbox.id}
-                      className="text-red-500 hover:text-red-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="text-red-500 hover:bg-red-900 hover:text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed rounded-md p-2 border border-red-500"
                     >
-                      {deletingId === mailbox.id ? "⏳..." : "🗑️ Eliminar"}
+                      {deletingId === mailbox.id ? "⏳..." : "Eliminar"}
                     </button>
                   </div>
                 </div>
                 {/* Resumen de mensajes */}
                 {mailbox.messages.length > 0 && (
                   <div className="mt-3 text-sm text-gray-500 border-t border-gray-100 pt-2">
-                    📥 {mailbox.messages.length} mensaje(s). Último:{" "}
+                    {mailbox.messages.length} mensaje(s). Último:{" "}
                     {mailbox.messages[0].receivedAt.toLocaleString()}
                   </div>
                 )}

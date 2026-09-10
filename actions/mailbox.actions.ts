@@ -145,17 +145,12 @@ export async function getMailboxMessages(mailboxId: string) {
 //  4. SINCRONIZAR UN CORREO
 // ============================================================
 
-export async function syncMailbox(mailboxId: string) {
+// Sincroniza un mailbox sin verificar sesión de usuario (usado por el cron y por syncMailbox).
+export async function syncMailboxInternal(mailboxId: string) {
   try {
-    const user = await getCurrentUser();
-    if (!user) {
-      return { success: false, error: "No autenticado" };
-    }
-
     const mailbox = await prisma.mailbox.findFirst({
       where: {
         id: mailboxId,
-        userId: user.id,
         status: "active",
       },
     });
@@ -382,6 +377,26 @@ ${hasAttachments ? "📎 <b>Adjuntos:</b> Sí" : ""}
     return { success: false, error: error.message };
   }
 }
+
+// Versión pública usada desde el dashboard: valida que el mailbox pertenezca al usuario logueado.
+export async function syncMailbox(mailboxId: string) {
+  const user = await getCurrentUser();
+  if (!user) {
+    return { success: false, error: "No autenticado" };
+  }
+
+  const mailbox = await prisma.mailbox.findFirst({
+    where: { id: mailboxId, userId: user.id, status: "active" },
+    select: { id: true },
+  });
+
+  if (!mailbox) {
+    return { success: false, error: "Correo no encontrado o no autorizado" };
+  }
+
+  return syncMailboxInternal(mailboxId);
+}
+
 // ============================================================
 //  5. SINCRONIZAR TODOS LOS CORREOS
 // ============================================================
@@ -404,7 +419,7 @@ export async function syncAllMailboxesInternal() {
 
     const results = await Promise.all(
       mailboxes.map(async (mb: { id: string; emailAddress: string }) => {
-        const result = await syncMailbox(mb.id);
+        const result = await syncMailboxInternal(mb.id);
         return {
           email: mb.emailAddress,
           ...result,
