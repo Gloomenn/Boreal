@@ -141,35 +141,35 @@ export default function MailboxDetailPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-950 p-4 md:p-8">
       <div className="max-w-4xl mx-auto">
         {/* Barra superior con botón de volver y sincronizar */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
           <button
             onClick={() => router.push("/dashboard")}
-            className="text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+            className="text-blue-600 hover:text-white font-medium flex items-center gap-1 border border-blue-600 p-2 rounded-lg hover:bg-blue-900 "
           >
             ← Volver al Dashboard
           </button>
           <button
             onClick={handleSyncThisMailbox}
             disabled={syncing}
-            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-4 py-2 bg-none border border-green-600 text-white rounded-md hover:bg-green-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
             {syncing ? (
               <>
                 <span className="animate-spin">⏳</span> Sincronizando...
               </>
             ) : (
-              "🔄 Refrescar este buzón"
+              "Refrescar este buzón"
             )}
           </button>
           <button
             onClick={handleDeleteThisMailbox}
             disabled={deleting}
-            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-4 py-2 bg-none border border-red-600 text-white rounded-md hover:bg-red-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
-            {deleting ? "⏳ Eliminando..." : "🗑️ Eliminar buzón"}
+            {deleting ? "Eliminando..." : "Eliminar buzón"}
           </button>
         </div>
 
@@ -186,8 +186,8 @@ export default function MailboxDetailPage() {
         )}
 
         {/* Título */}
-        <h1 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-2">
-          📨 Mensajes recibidos
+        <h1 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+          Mensajes recibidos
           <span className="text-sm font-normal text-gray-400">
             ({messages.length} mensaje{messages.length !== 1 ? "s" : ""})
           </span>
@@ -201,7 +201,7 @@ export default function MailboxDetailPage() {
           </div>
         ) : messages.length === 0 ? (
           <div className="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
-            <p className="text-lg">📭 No hay mensajes en este buzón.</p>
+            <p className="text-lg">No hay mensajes en este buzón.</p>
             <p className="text-sm mt-2">
               Envía un correo a esta dirección o haz clic en "Refrescar este
               buzón".
@@ -212,15 +212,15 @@ export default function MailboxDetailPage() {
             {messages.map((msg) => (
               <div
                 key={msg.id}
-                className="bg-white rounded-lg shadow-md p-6 border border-gray-100 hover:shadow-lg transition"
+                className="bg-indigo-950 rounded-lg shadow-md p-6 border border-gray-100 hover:shadow-lg transition"
               >
                 {/* Cabecera del mensaje */}
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-3">
                   <div>
-                    <h3 className="font-semibold text-gray-800 text-lg">
+                    <h3 className="font-semibold text-white text-lg">
                       {msg.subject || "Sin asunto"}
                     </h3>
-                    <p className="text-sm text-gray-600">
+                    <p className="text-sm text-gray-300">
                       <span className="font-medium">De:</span> {msg.from}
                     </p>
                   </div>
@@ -239,8 +239,8 @@ export default function MailboxDetailPage() {
                 {/* Cuerpo del mensaje - VISTA HTML */}
                 {msg.bodyHtml && (
                   <div className="mb-4">
-                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                      📄 Contenido del mensaje
+                    <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-2">
+                      Contenido del mensaje
                     </h4>
                     <div
                       className="prose prose-sm max-w-none bg-white p-4 rounded border border-gray-200 overflow-auto max-h-96"
