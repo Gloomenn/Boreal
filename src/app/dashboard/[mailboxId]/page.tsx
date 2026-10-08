@@ -1,7 +1,7 @@
 // app/dashboard/[mailboxId]/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   getMailboxMessages,
@@ -38,36 +38,65 @@ export default function MailboxDetailPage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Cargar mensajes al montar la página
-  useEffect(() => {
-    if (mailboxId) {
-      loadMessages();
+  const fetchMailboxData = useCallback(async () => {
+    const result = await getMailboxMessages(mailboxId);
+    if (!result.success) {
+      throw new Error(result.error || "Error al cargar los mensajes");
     }
+    if (!result.data) {
+      throw new Error("No se pudieron cargar los datos del buzón");
+    }
+    return result.data;
   }, [mailboxId]);
 
-  const loadMessages = async () => {
+  const loadMessages = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       setMailbox(null);
       setMessages([]);
-      const result = await getMailboxMessages(mailboxId);
-      if (result.success) {
-        if (!result.data) {
-          setError("No se pudieron cargar los datos del buzón");
-          return;
-        }
-        setMailbox(result.data.mailbox);
-        setMessages(result.data.messages);
-      } else {
-        setError(result.error || "Error al cargar los mensajes");
-      }
-    } catch {
-      setError("Error inesperado al cargar los mensajes");
+      const data = await fetchMailboxData();
+      setMailbox(data.mailbox);
+      setMessages(data.messages);
+    } catch (loadError: unknown) {
+      setError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Error inesperado al cargar los mensajes",
+      );
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchMailboxData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (mailboxId) {
+      void fetchMailboxData()
+        .then((data) => {
+          if (!cancelled) {
+            setMailbox(data.mailbox);
+            setMessages(data.messages);
+          }
+        })
+        .catch((loadError: unknown) => {
+          if (!cancelled) {
+            setError(
+              loadError instanceof Error
+                ? loadError.message
+                : "Error inesperado al cargar los mensajes",
+            );
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchMailboxData, mailboxId]);
 
   // Sincronizar SOLO este buzón (descargar mensajes nuevos)
   const handleSyncThisMailbox = async () => {
@@ -138,8 +167,12 @@ export default function MailboxDetailPage() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (error: any) {
-      setError("Error al descargar el archivo: " + error.message);
+    } catch (downloadError: unknown) {
+      const message =
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Error desconocido";
+      setError("Error al descargar el archivo: " + message);
     }
   };
 
@@ -154,167 +187,252 @@ export default function MailboxDetailPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 p-4 md:p-8">
-      <div className="max-w-7xl mx-auto">
-        {/* Barra superior con botón de volver y sincronizar */}
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+    <div className="min-h-screen bg-[#f5f6f7] px-4 py-6 text-slate-900 sm:px-6 sm:py-8 lg:px-8">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={() => router.push("/dashboard")}
-            className="text-blue-600 hover:text-white font-medium flex items-center gap-1 border border-blue-600 p-2 rounded-lg hover:bg-blue-900 "
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition hover:bg-white hover:text-purple-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-600"
           >
-            ← Volver al Dashboard
+            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+              arrow_back
+            </span>
+            Volver a mis buzones
           </button>
-          <button
-            onClick={handleSyncThisMailbox}
-            disabled={syncing}
-            className="px-4 py-2 bg-none border border-green-600 text-white rounded-md hover:bg-green-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {syncing ? (
-              <>
-                <span className="animate-spin">⏳</span> Sincronizando...
-              </>
-            ) : (
-              "Refrescar este buzón"
-            )}
-          </button>
-          <button
-            onClick={handleDeleteThisMailbox}
-            disabled={deleting}
-            className="px-4 py-2 bg-none border border-red-600 text-white rounded-md hover:bg-red-900 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {deleting ? "Eliminando..." : "Eliminar buzón"}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSyncThisMailbox}
+              disabled={syncing || loading}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-purple-300 hover:text-purple-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-purple-600/10 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span
+                className={`material-symbols-outlined text-[18px] ${syncing ? "animate-spin" : ""}`}
+                aria-hidden="true"
+              >
+                sync
+              </span>
+              <span className="hidden sm:inline">
+                {syncing ? "Sincronizando..." : "Comprobar correo"}
+              </span>
+              <span className="sm:hidden">{syncing ? "Sincronizando..." : "Actualizar"}</span>
+            </button>
+            <button
+              onClick={handleDeleteThisMailbox}
+              disabled={deleting}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                delete
+              </span>
+              <span className="hidden sm:inline">
+                {deleting ? "Eliminando..." : "Eliminar buzón"}
+              </span>
+            </button>
+          </div>
         </div>
 
-        {/* Mensajes de estado */}
-        {syncMessage && (
-          <div className="mb-4 p-3 bg-blue-100 text-blue-700 rounded-lg border border-blue-300">
-            {syncMessage}
+        <div className="mb-8">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-purple-700">
+            Bandeja de entrada
+          </p>
+          <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
+            <div>
+              <h1 className="text-3xl font-semibold tracking-tight text-slate-950 sm:text-[2.15rem]">
+                {mailbox?.aliasName || "Mensajes recibidos"}
+              </h1>
+              <p className="mt-2 text-sm text-slate-600 sm:text-base">
+                Revisa los mensajes que llegaron a este correo temporal.
+              </p>
+            </div>
+            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-2 text-sm text-slate-600 shadow-sm">
+              <span className="h-2 w-2 rounded-full bg-purple-600" aria-hidden="true" />
+              {messages.length} {messages.length === 1 ? "mensaje" : "mensajes"}
+            </span>
           </div>
-        )}
-        {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg border border-red-300">
-            ❌ {error}
+        </div>
+
+        {(syncMessage || error) && (
+          <div className="mb-6 space-y-3" aria-live="polite">
+            {syncMessage && (
+              <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3.5 text-sm text-emerald-900">
+                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
+                  check_circle
+                </span>
+                <p>{syncMessage.replace(/^✅\s*/, "")}</p>
+              </div>
+            )}
+            {error && (
+              <div role="alert" className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3.5 text-sm text-rose-900">
+                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
+                  error
+                </span>
+                <p>{error}</p>
+              </div>
+            )}
           </div>
         )}
 
-        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_19rem]">
           <section className="min-w-0">
-            {/* Título */}
-            <h1 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-              Mensajes recibidos
-              <span className="text-sm font-normal text-gray-400">
-                ({messages.length} mensaje{messages.length !== 1 ? "s" : ""})
-              </span>
-            </h1>
-
-            {/* Contenido: loading, vacío o lista de mensajes */}
             {loading ? (
-              <div className="text-center py-12 bg-white rounded-lg shadow-md">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
-                <p className="text-gray-500">Cargando mensajes...</p>
+              <div className="space-y-3" aria-label="Cargando mensajes">
+                {[1, 2].map((item) => (
+                  <div
+                    key={item}
+                    className="animate-pulse rounded-2xl border border-slate-200 bg-white p-6"
+                  >
+                    <div className="mb-4 h-4 w-48 rounded bg-slate-100" />
+                    <div className="mb-6 h-3 w-32 rounded bg-slate-100" />
+                    <div className="space-y-2">
+                      <div className="h-3 w-full rounded bg-slate-100" />
+                      <div className="h-3 w-4/5 rounded bg-slate-100" />
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : messages.length === 0 ? (
-              <div className="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
-                <p className="text-lg">No hay mensajes en este buzón.</p>
-                <p className="text-sm mt-2">
-                  Envía un correo a esta dirección o haz clic en "Refrescar este
-                  buzón".
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
+                <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-purple-50 text-purple-700">
+                  <span className="material-symbols-outlined text-[25px]" aria-hidden="true">
+                    drafts
+                  </span>
+                </span>
+                <h2 className="text-base font-semibold text-slate-900">
+                  Aún no hay mensajes
+                </h2>
+                <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">
+                  Los mensajes que envíen a este correo aparecerán aquí. Puedes
+                  comprobar si llegaron correos nuevos en cualquier momento.
                 </p>
+                <button
+                  onClick={handleSyncThisMailbox}
+                  disabled={syncing}
+                  className="mt-5 inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-purple-300 hover:text-purple-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-purple-600/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span
+                    className={`material-symbols-outlined text-[18px] ${syncing ? "animate-spin" : ""}`}
+                    aria-hidden="true"
+                  >
+                    sync
+                  </span>
+                  {syncing ? "Comprobando..." : "Comprobar correo"}
+                </button>
               </div>
             ) : (
               <div className="space-y-4">
                 {messages.map((msg) => (
-                  <div
+                  <article
                     key={msg.id}
-                    className="bg-indigo-950 rounded-lg shadow-md p-6 border border-gray-100 hover:shadow-lg transition"
+                    className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm shadow-slate-900/[0.025] transition hover:border-slate-300"
                   >
-                    {/* Cabecera del mensaje */}
-                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-3">
-                      <div>
-                        <h3 className="font-semibold text-white text-lg">
-                          {msg.subject || "Sin asunto"}
-                        </h3>
-                        <p className="text-sm text-gray-300">
-                          <span className="font-medium">De:</span> {msg.from}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <span className="text-xs text-gray-400">
-                          {formatDate(msg.receivedAt)}
+                    <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-start sm:justify-between sm:px-6">
+                      <div className="flex min-w-0 items-start gap-3">
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-purple-700">
+                          <span className="material-symbols-outlined" aria-hidden="true">
+                            mail
+                          </span>
                         </span>
+                        <div className="min-w-0">
+                          <h2 className="break-words text-base font-semibold text-slate-900">
+                            {msg.subject || "Sin asunto"}
+                          </h2>
+                          <p className="mt-1 break-all text-sm text-slate-500">
+                            <span className="font-medium text-slate-700">De </span>
+                            {msg.from}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 flex-wrap items-center gap-2 pl-[52px] sm:pl-0">
+                        <time
+                          dateTime={new Date(msg.receivedAt).toISOString()}
+                          className="text-xs text-slate-500"
+                        >
+                          {formatDate(msg.receivedAt)}
+                        </time>
                         {msg.hasAttachments && (
-                          <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
-                            📎 Adjunto
+                          <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2.5 py-1 text-xs font-medium text-purple-800">
+                            <span className="material-symbols-outlined text-[15px]" aria-hidden="true">
+                              attach_file
+                            </span>
+                            Adjunto
                           </span>
                         )}
                       </div>
                     </div>
 
-                    {/* Cuerpo del mensaje - VISTA HTML */}
-                    {msg.bodyHtml && (
-                      <div className="mb-4">
-                        <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-2">
-                          Contenido del mensaje
-                        </h4>
-                        <div
-                          className="prose prose-sm max-w-none bg-white p-4 rounded border border-gray-200 overflow-auto max-h-96"
-                          dangerouslySetInnerHTML={{
-                            __html: msg.bodyHtml.replace(
-                              /<img[^>]+src="http:/g,
-                              '<img src="http:',
-                            ),
-                          }}
-                        />
-                      </div>
-                    )}
-
-                    {/* Vista de texto plano (si no hay HTML o como respaldo) */}
-                    {!msg.bodyHtml && msg.bodyText && (
-                      <div className="mb-4">
-                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                          📝 Texto plano
-                        </h4>
-                        <div className="bg-white p-4 rounded border border-gray-200 text-sm text-gray-700 whitespace-pre-wrap font-mono max-h-96 overflow-auto">
-                          {msg.bodyText}
+                    <div className="px-5 py-5 sm:px-6">
+                      {msg.bodyHtml ? (
+                        <div>
+                          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                            Contenido del mensaje
+                          </p>
+                          <div
+                            className="prose prose-sm max-w-none overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-700 [&_img]:max-w-full"
+                            dangerouslySetInnerHTML={{
+                              __html: msg.bodyHtml.replace(
+                                /<img[^>]+src="http:/g,
+                                '<img src="http:',
+                              ),
+                            }}
+                          />
                         </div>
-                      </div>
-                    )}
-
-                    {/* Si no hay contenido */}
-                    {!msg.bodyHtml && !msg.bodyText && (
-                      <div className="text-sm text-gray-400 italic">
-                        (Sin contenido visible)
-                      </div>
-                    )}
+                      ) : msg.bodyText ? (
+                        <div>
+                          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                            Texto del mensaje
+                          </p>
+                          <div className="max-h-96 overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700 whitespace-pre-wrap">
+                            {msg.bodyText}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-sm italic text-slate-400">
+                          Este mensaje no tiene contenido visible.
+                        </p>
+                      )}
 
                     {msg.hasAttachments && (
-                      <div className="mt-3 border-t border-gray-100 pt-3">
+                      <div className="mt-5 border-t border-slate-100 pt-4">
                         <button
                           onClick={() => handleDownload(msg.id)}
-                          className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded hover:bg-blue-200 transition flex items-center gap-2"
+                          className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-700 transition hover:border-purple-300 hover:bg-purple-50 hover:text-purple-800 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-purple-600/10"
                         >
-                          📎 Descargar adjunto
+                          <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                            download
+                          </span>
+                          Descargar adjunto
                         </button>
                       </div>
                     )}
-                  </div>
+                    </div>
+                  </article>
                 ))}
               </div>
             )}
           </section>
 
-          <aside className="h-fit rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-lg lg:sticky lg:top-6">
-            <h2 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white">
-              <span aria-hidden="true">📬</span>
-              Buzón asignado
-            </h2>
-            <dl className="space-y-5">
+          <aside className="h-fit rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-900/[0.025] lg:sticky lg:top-6">
+            <div className="mb-5 flex items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-50 text-purple-700">
+                <span className="material-symbols-outlined" aria-hidden="true">
+                  inbox
+                </span>
+              </span>
               <div>
-                <dt className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+                <h2 className="text-sm font-semibold text-slate-900">
+                  Detalles del buzón
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Información de este trámite
+                </p>
+              </div>
+            </div>
+            <dl className="divide-y divide-slate-100">
+              <div className="py-4 first:pt-0">
+                <dt className="mb-1.5 text-xs font-medium uppercase tracking-[0.12em] text-slate-400">
                   Etiqueta del trámite
                 </dt>
-                <dd className="break-words text-sm font-medium text-white">
+                <dd className="break-words text-sm font-medium text-slate-900">
                   {mailbox
                     ? mailbox.aliasName || "Sin etiqueta"
                     : loading
@@ -322,11 +440,11 @@ export default function MailboxDetailPage() {
                       : "No disponible"}
                 </dd>
               </div>
-              <div>
-                <dt className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+              <div className="py-4 last:pb-0">
+                <dt className="mb-1.5 text-xs font-medium uppercase tracking-[0.12em] text-slate-400">
                   Correo temporal
                 </dt>
-                <dd className="break-all font-mono text-sm text-sky-300">
+                <dd className="break-all font-mono text-sm leading-6 text-purple-800">
                   {mailbox
                     ? mailbox.emailAddress
                     : loading
