@@ -119,6 +119,10 @@ export async function getMailboxMessages(mailboxId: string) {
         id: mailboxId,
         userId: user.id,
       },
+      select: {
+        aliasName: true,
+        emailAddress: true,
+      },
     });
 
     if (!mailbox) {
@@ -134,7 +138,13 @@ export async function getMailboxMessages(mailboxId: string) {
       },
     });
 
-    return { success: true, data: messages };
+    return {
+      success: true,
+      data: {
+        mailbox,
+        messages,
+      },
+    };
   } catch (error: any) {
     console.error("❌ Error obteniendo mensajes:", error);
     return { success: false, error: error.message };

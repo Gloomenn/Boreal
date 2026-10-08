@@ -41,6 +41,17 @@ export default function DashboardPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopyEmail = async (mailboxId: string, email: string) => {
+    try {
+      await navigator.clipboard.writeText(email);
+      setCopiedId(mailboxId);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      setError("No se pudo copiar el correo al portapapeles");
+    }
+  };
 
   useEffect(() => {
     loadMailboxes();
@@ -284,9 +295,27 @@ export default function DashboardPage() {
                     <h3 className="font-semibold text-white">
                       {mailbox.aliasName || "Sin nombre"}
                     </h3>
-                    <p className="text-sm text-gray-400 font-mono">
-                      {mailbox.emailAddress}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm text-gray-400 font-mono">
+                        {mailbox.emailAddress}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopyEmail(mailbox.id, mailbox.emailAddress)
+                        }
+                        aria-label="Copiar correo"
+                        title={copiedId === mailbox.id ? "¡Copiado!" : "Copiar correo"}
+                        className="flex items-center rounded border border-stone-700 p-1 text-gray-400 transition hover:bg-stone-800 hover:text-white"
+                      >
+                        <span
+                          className="material-symbols-outlined"
+                          style={{ fontSize: 16 }}
+                        >
+                          {copiedId === mailbox.id ? "check" : "content_copy"}
+                        </span>
+                      </button>
+                    </div>
                     <p className="text-xs text-gray-500">
                       Creado: {mailbox.createdAt.toLocaleDateString()}
                     </p>

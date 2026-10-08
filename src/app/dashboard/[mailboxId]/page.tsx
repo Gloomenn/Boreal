@@ -20,12 +20,18 @@ interface Message {
   hasAttachments: boolean;
 }
 
+interface MailboxInfo {
+  aliasName: string | null;
+  emailAddress: string;
+}
+
 export default function MailboxDetailPage() {
   const params = useParams();
   const router = useRouter();
   const mailboxId = params.mailboxId as string;
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const [mailbox, setMailbox] = useState<MailboxInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,9 +49,16 @@ export default function MailboxDetailPage() {
     try {
       setLoading(true);
       setError(null);
+      setMailbox(null);
+      setMessages([]);
       const result = await getMailboxMessages(mailboxId);
       if (result.success) {
-        setMessages(result.data || []);
+        if (!result.data) {
+          setError("No se pudieron cargar los datos del buzón");
+          return;
+        }
+        setMailbox(result.data.mailbox);
+        setMessages(result.data.messages);
       } else {
         setError(result.error || "Error al cargar los mensajes");
       }
@@ -142,7 +155,7 @@ export default function MailboxDetailPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 p-4 md:p-8">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         {/* Barra superior con botón de volver y sincronizar */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
           <button
@@ -185,108 +198,145 @@ export default function MailboxDetailPage() {
           </div>
         )}
 
-        {/* Título */}
-        <h1 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
-          Mensajes recibidos
-          <span className="text-sm font-normal text-gray-400">
-            ({messages.length} mensaje{messages.length !== 1 ? "s" : ""})
-          </span>
-        </h1>
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          <section className="min-w-0">
+            {/* Título */}
+            <h1 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+              Mensajes recibidos
+              <span className="text-sm font-normal text-gray-400">
+                ({messages.length} mensaje{messages.length !== 1 ? "s" : ""})
+              </span>
+            </h1>
 
-        {/* Contenido: loading, vacío o lista de mensajes */}
-        {loading ? (
-          <div className="text-center py-12 bg-white rounded-lg shadow-md">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
-            <p className="text-gray-500">Cargando mensajes...</p>
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
-            <p className="text-lg">No hay mensajes en este buzón.</p>
-            <p className="text-sm mt-2">
-              Envía un correo a esta dirección o haz clic en "Refrescar este
-              buzón".
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className="bg-indigo-950 rounded-lg shadow-md p-6 border border-gray-100 hover:shadow-lg transition"
-              >
-                {/* Cabecera del mensaje */}
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-3">
-                  <div>
-                    <h3 className="font-semibold text-white text-lg">
-                      {msg.subject || "Sin asunto"}
-                    </h3>
-                    <p className="text-sm text-gray-300">
-                      <span className="font-medium">De:</span> {msg.from}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
-                    <span className="text-xs text-gray-400">
-                      {formatDate(msg.receivedAt)}
-                    </span>
+            {/* Contenido: loading, vacío o lista de mensajes */}
+            {loading ? (
+              <div className="text-center py-12 bg-white rounded-lg shadow-md">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-3"></div>
+                <p className="text-gray-500">Cargando mensajes...</p>
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="bg-white rounded-lg shadow-md p-12 text-center text-gray-500">
+                <p className="text-lg">No hay mensajes en este buzón.</p>
+                <p className="text-sm mt-2">
+                  Envía un correo a esta dirección o haz clic en "Refrescar este
+                  buzón".
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className="bg-indigo-950 rounded-lg shadow-md p-6 border border-gray-100 hover:shadow-lg transition"
+                  >
+                    {/* Cabecera del mensaje */}
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 mb-3">
+                      <div>
+                        <h3 className="font-semibold text-white text-lg">
+                          {msg.subject || "Sin asunto"}
+                        </h3>
+                        <p className="text-sm text-gray-300">
+                          <span className="font-medium">De:</span> {msg.from}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <span className="text-xs text-gray-400">
+                          {formatDate(msg.receivedAt)}
+                        </span>
+                        {msg.hasAttachments && (
+                          <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
+                            📎 Adjunto
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Cuerpo del mensaje - VISTA HTML */}
+                    {msg.bodyHtml && (
+                      <div className="mb-4">
+                        <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-2">
+                          Contenido del mensaje
+                        </h4>
+                        <div
+                          className="prose prose-sm max-w-none bg-white p-4 rounded border border-gray-200 overflow-auto max-h-96"
+                          dangerouslySetInnerHTML={{
+                            __html: msg.bodyHtml.replace(
+                              /<img[^>]+src="http:/g,
+                              '<img src="http:',
+                            ),
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* Vista de texto plano (si no hay HTML o como respaldo) */}
+                    {!msg.bodyHtml && msg.bodyText && (
+                      <div className="mb-4">
+                        <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                          📝 Texto plano
+                        </h4>
+                        <div className="bg-white p-4 rounded border border-gray-200 text-sm text-gray-700 whitespace-pre-wrap font-mono max-h-96 overflow-auto">
+                          {msg.bodyText}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Si no hay contenido */}
+                    {!msg.bodyHtml && !msg.bodyText && (
+                      <div className="text-sm text-gray-400 italic">
+                        (Sin contenido visible)
+                      </div>
+                    )}
+
                     {msg.hasAttachments && (
-                      <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full">
-                        📎 Adjunto
-                      </span>
+                      <div className="mt-3 border-t border-gray-100 pt-3">
+                        <button
+                          onClick={() => handleDownload(msg.id)}
+                          className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded hover:bg-blue-200 transition flex items-center gap-2"
+                        >
+                          📎 Descargar adjunto
+                        </button>
+                      </div>
                     )}
                   </div>
-                </div>
-
-                {/* Cuerpo del mensaje - VISTA HTML */}
-                {msg.bodyHtml && (
-                  <div className="mb-4">
-                    <h4 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-2">
-                      Contenido del mensaje
-                    </h4>
-                    <div
-                      className="prose prose-sm max-w-none bg-white p-4 rounded border border-gray-200 overflow-auto max-h-96"
-                      dangerouslySetInnerHTML={{
-                        __html: msg.bodyHtml.replace(
-                          /<img[^>]+src="http:/g,
-                          '<img src="http:',
-                        ),
-                      }}
-                    />
-                  </div>
-                )}
-
-                {/* Vista de texto plano (si no hay HTML o como respaldo) */}
-                {!msg.bodyHtml && msg.bodyText && (
-                  <div className="mb-4">
-                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                      📝 Texto plano
-                    </h4>
-                    <div className="bg-white p-4 rounded border border-gray-200 text-sm text-gray-700 whitespace-pre-wrap font-mono max-h-96 overflow-auto">
-                      {msg.bodyText}
-                    </div>
-                  </div>
-                )}
-
-                {/* Si no hay contenido */}
-                {!msg.bodyHtml && !msg.bodyText && (
-                  <div className="text-sm text-gray-400 italic">
-                    (Sin contenido visible)
-                  </div>
-                )}
-
-                {msg.hasAttachments && (
-                  <div className="mt-3 border-t border-gray-100 pt-3">
-                    <button
-                      onClick={() => handleDownload(msg.id)}
-                      className="text-sm bg-blue-100 text-blue-700 px-3 py-1 rounded hover:bg-blue-200 transition flex items-center gap-2"
-                    >
-                      📎 Descargar adjunto
-                    </button>
-                  </div>
-                )}
+                ))}
               </div>
-            ))}
-          </div>
-        )}
+            )}
+          </section>
+
+          <aside className="h-fit rounded-xl border border-slate-700 bg-slate-900 p-5 shadow-lg lg:sticky lg:top-6">
+            <h2 className="mb-5 flex items-center gap-2 text-lg font-semibold text-white">
+              <span aria-hidden="true">📬</span>
+              Buzón asignado
+            </h2>
+            <dl className="space-y-5">
+              <div>
+                <dt className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+                  Etiqueta del trámite
+                </dt>
+                <dd className="break-words text-sm font-medium text-white">
+                  {mailbox
+                    ? mailbox.aliasName || "Sin etiqueta"
+                    : loading
+                      ? "Cargando..."
+                      : "No disponible"}
+                </dd>
+              </div>
+              <div>
+                <dt className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
+                  Correo temporal
+                </dt>
+                <dd className="break-all font-mono text-sm text-sky-300">
+                  {mailbox
+                    ? mailbox.emailAddress
+                    : loading
+                      ? "Cargando..."
+                      : "No disponible"}
+                </dd>
+              </div>
+            </dl>
+          </aside>
+        </div>
       </div>
     </div>
   );
