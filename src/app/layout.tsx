@@ -33,7 +33,16 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         {children}
         <footer className="border-t border-slate-200 bg-white px-4 py-3 text-center text-xs text-slate-600">
-          Correo temporal proporcionado por{" "}
+          Buzones nuevos por{" "}
+          <a
+            href="https://www.mailslurp.com/"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-purple-700 underline"
+          >
+            MailSlurp
+          </a>
+          {" "}y buzones anteriores por{" "}
           <a
             href="https://mail.tm/"
             target="_blank"

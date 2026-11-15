@@ -22,9 +22,9 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 ## Temporary mailboxes
 
-The application creates and syncs temporary mailboxes through [Mail.tm](https://docs.mail.tm/). If Mail.tm returns HTTP 403 while creating an inbox, it retries using the provider's [Mail.gw-compatible API](https://docs.mail.gw/) and records which API created the mailbox. No Mail.tm API key is required, and `MAILSLURP_API_KEY` is no longer used. Set `MAILTM_PASSWORD_SECRET` to a stable, private value in local and Vercel environments; if it is not set, the app derives mailbox credentials from `JWT_SECRET`. Keep the selected secret unchanged while Mail.tm mailboxes are in use. Mail.tm has an 8-request-per-second limit per IP, and the app links to Mail.tm in its site footer as required by the provider.
+New mailboxes are created and synced through [MailSlurp](https://www.mailslurp.com/), including attachment downloads. Configure `MAILSLURP_API_KEY` in local and Vercel environments and use a MailSlurp plan that permits retained, non-expiring inboxes; the app requests permanent inboxes explicitly and reports an error if the plan returns an expiring inbox.
 
-Mailboxes created with the former MailSlurp integration cannot be transferred to Mail.tm. Delete those records and create new mailboxes after deploying this version.
+Previously created MailSlurp inboxes remain usable. Mailboxes created during the Mail.tm migration are also still supported for synchronization, attachment downloads, and deletion. Keep `MAILTM_PASSWORD_SECRET` stable while any of those legacy Mail.tm mailboxes remain active; when it is not set, their credentials are derived from `JWT_SECRET`. The footer retains the Mail.tm attribution link for these legacy inboxes.
 
 ## Learn More
 
