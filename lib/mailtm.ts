@@ -84,15 +84,15 @@ async function getErrorMessage(response: Response) {
       const error = data as Record<string, unknown>;
       for (const key of ["detail", "message", "hydra:description", "title"]) {
         if (typeof error[key] === "string" && error[key]) {
-          return error[key];
+          return `${response.status}: ${error[key]}`;
         }
       }
     }
   } catch {
-    return `HTTP ${response.status}: ${body.slice(0, 300)}`;
+    return `${response.status}: ${body.slice(0, 300)}`;
   }
 
-  return `HTTP ${response.status}: ${body.slice(0, 300)}`;
+  return `${response.status}: ${body.slice(0, 300)}`;
 }
 
 async function requestJson<T>(
@@ -112,7 +112,11 @@ async function requestJson<T>(
   });
 
   if (!response.ok) {
-    throw new Error(`Mail.tm: ${await getErrorMessage(response)}`);
+    const method = (init.method || "GET").toUpperCase();
+    const endpoint = providerUrl(path).pathname;
+    throw new Error(
+      `Mail.tm rechazó ${method} ${endpoint}: HTTP ${await getErrorMessage(response)}`,
+    );
   }
 
   return (await response.json()) as T;
