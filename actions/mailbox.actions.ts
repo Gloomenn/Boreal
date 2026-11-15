@@ -235,6 +235,7 @@ export async function syncMailboxInternal(mailboxId: string) {
         const fullEmail: MailTmMessage = await getMailTmMessage(
           accessToken,
           emailId,
+          mailbox.apiToken,
         );
 
         const htmlBody = Array.isArray(fullEmail.html)
@@ -485,7 +486,11 @@ export async function downloadAttachment(messageId: string, mailboxId: string) {
       mailbox.emailAddress,
       mailbox.apiToken,
     );
-    const fullEmail = await getMailTmMessage(accessToken, message.messageId);
+    const fullEmail = await getMailTmMessage(
+      accessToken,
+      message.messageId,
+      mailbox.apiToken,
+    );
 
     if (
       !Array.isArray(fullEmail.attachments) ||
@@ -498,6 +503,7 @@ export async function downloadAttachment(messageId: string, mailboxId: string) {
       accessToken,
       message.messageId,
       fullEmail.attachments[0],
+      mailbox.apiToken,
     );
     const safeFilename = attachment.filename.replace(/[\r\n"\\]/g, "_");
 

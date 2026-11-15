@@ -1,7 +1,21 @@
 import { createHmac, randomBytes, randomInt } from "node:crypto";
 
 const MAILTM_API_URL = "https://api.mail.tm";
-const MAILTM_ACCOUNT_PREFIX = "mailtm:v1:";
+const MAILGW_API_URL = "https://api.mail.gw";
+const MAILTM_LEGACY_ACCOUNT_PREFIX = "mailtm:v1:";
+const MAILTM_ACCOUNT_PREFIX = "mailtm:v2:";
+
+type MailTmProvider = "mail.tm" | "mail.gw";
+
+class MailTmRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "MailTmRequestError";
+  }
+}
 
 interface MailTmDomain {
   domain: string;
@@ -66,9 +80,10 @@ function getPassword(emailAddress: string) {
     .digest("hex");
 }
 
-function providerUrl(path: string) {
-  const url = new URL(path, MAILTM_API_URL);
-  if (url.origin !== MAILTM_API_URL) {
+function providerUrl(path: string, provider: MailTmProvider) {
+  const baseUrl = provider === "mail.gw" ? MAILGW_API_URL : MAILTM_API_URL;
+  const url = new URL(path, baseUrl);
+  if (url.origin !== baseUrl) {
     throw new Error("Mail.tm devolvió una URL de API no válida.");
   }
   return url;
@@ -76,7 +91,7 @@ function providerUrl(path: string) {
 
 async function getErrorMessage(response: Response) {
   const body = await response.text();
-  if (!body) return `HTTP ${response.status}`;
+  if (!body) return "";
 
   try {
     const data: unknown = JSON.parse(body);
@@ -84,28 +99,29 @@ async function getErrorMessage(response: Response) {
       const error = data as Record<string, unknown>;
       for (const key of ["detail", "message", "hydra:description", "title"]) {
         if (typeof error[key] === "string" && error[key]) {
-          return `${response.status}: ${error[key]}`;
+          return error[key];
         }
       }
     }
   } catch {
-    return `${response.status}: ${body.slice(0, 300)}`;
+    return body.slice(0, 300);
   }
 
-  return `${response.status}: ${body.slice(0, 300)}`;
+  return body.slice(0, 300);
 }
 
 async function requestJson<T>(
   path: string,
   init: RequestInit = {},
   accessToken?: string,
+  provider: MailTmProvider = "mail.tm",
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
   if (init.body) headers.set("Content-Type", "application/json");
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const response = await fetch(providerUrl(path), {
+  const response = await fetch(providerUrl(path, provider), {
     ...init,
     headers,
     cache: "no-store",
@@ -113,9 +129,11 @@ async function requestJson<T>(
 
   if (!response.ok) {
     const method = (init.method || "GET").toUpperCase();
-    const endpoint = providerUrl(path).pathname;
-    throw new Error(
-      `Mail.tm rechazó ${method} ${endpoint}: HTTP ${await getErrorMessage(response)}`,
+    const endpoint = providerUrl(path, provider).pathname;
+    const details = await getErrorMessage(response);
+    throw new MailTmRequestError(
+      `${provider} rechazó ${method} ${endpoint}: HTTP ${response.status}${details ? `: ${details}` : ""}`,
+      response.status,
     );
   }
 
@@ -130,13 +148,33 @@ function getResourceId(resource: MailTmAccount | MailTmMessage) {
   return null;
 }
 
-function getAccountIdFromToken(accountToken: string) {
+function getAccountFromToken(
+  accountToken: string,
+): { id: string; provider: MailTmProvider } | null {
+  if (accountToken.startsWith(MAILTM_LEGACY_ACCOUNT_PREFIX)) {
+    const id = accountToken.slice(MAILTM_LEGACY_ACCOUNT_PREFIX.length);
+    return id ? { id, provider: "mail.tm" as const } : null;
+  }
+
   if (!accountToken.startsWith(MAILTM_ACCOUNT_PREFIX)) return null;
-  return accountToken.slice(MAILTM_ACCOUNT_PREFIX.length) || null;
+  const [provider, ...idParts] = accountToken
+    .slice(MAILTM_ACCOUNT_PREFIX.length)
+    .split(":");
+  const id = idParts.join(":");
+  if ((provider !== "mail.tm" && provider !== "mail.gw") || !id) return null;
+  return { id, provider };
 }
 
 export function isMailTmMailbox(accountToken: string) {
-  return getAccountIdFromToken(accountToken) !== null;
+  return getAccountFromToken(accountToken) !== null;
+}
+
+function getProviderFromAccountToken(accountToken: string) {
+  const account = getAccountFromToken(accountToken);
+  if (!account) {
+    throw new Error("El identificador del buzón de correo no es válido.");
+  }
+  return account.provider;
 }
 
 export async function authenticateMailTmMailbox(
@@ -148,15 +186,21 @@ export async function authenticateMailTmMailbox(
       "Este buzón fue creado con otro proveedor. Elimínalo y crea uno nuevo para usar Mail.tm.",
     );
   }
-  return getAccessToken(emailAddress);
+  return getAccessToken(
+    emailAddress,
+    getProviderFromAccountToken(accountToken),
+  );
 }
 
-async function getAccessToken(emailAddress: string) {
+async function getAccessToken(
+  emailAddress: string,
+  provider: MailTmProvider = "mail.tm",
+) {
   const password = getPassword(emailAddress);
   const tokenResult = await requestJson<MailTmToken>("/token", {
     method: "POST",
     body: JSON.stringify({ address: emailAddress, password }),
-  });
+  }, undefined, provider);
 
   if (!tokenResult.token) {
     throw new Error("Mail.tm no devolvió un token de acceso.");
@@ -165,10 +209,10 @@ async function getAccessToken(emailAddress: string) {
   return tokenResult.token;
 }
 
-export async function createMailTmMailbox() {
+async function createMailTmMailboxWithProvider(provider: MailTmProvider) {
   const domainResponse = await requestJson<
     MailTmCollection<MailTmDomain> | MailTmDomain[]
-  >("/domains");
+  >("/domains", {}, undefined, provider);
   const availableDomains = Array.isArray(domainResponse)
     ? domainResponse
     : domainResponse["hydra:member"];
@@ -190,7 +234,7 @@ export async function createMailTmMailbox() {
   const account = await requestJson<MailTmAccount>("/accounts", {
     method: "POST",
     body: JSON.stringify({ address: emailAddress, password }),
-  });
+  }, undefined, provider);
   const accountId = getResourceId(account);
 
   if (!accountId) {
@@ -199,8 +243,26 @@ export async function createMailTmMailbox() {
 
   return {
     emailAddress,
-    accountToken: `${MAILTM_ACCOUNT_PREFIX}${accountId}`,
+    accountToken: `${MAILTM_ACCOUNT_PREFIX}${provider}:${accountId}`,
   };
+}
+
+export async function createMailTmMailbox() {
+  try {
+    return await createMailTmMailboxWithProvider("mail.tm");
+  } catch (error) {
+    if (!(error instanceof MailTmRequestError) || error.status !== 403) {
+      throw error;
+    }
+
+    try {
+      return await createMailTmMailboxWithProvider("mail.gw");
+    } catch (fallbackError) {
+      throw new Error(
+        `Mail.tm rechazó la solicitud con HTTP 403. También falló el endpoint oficial compatible Mail.gw: ${fallbackError instanceof Error ? fallbackError.message : "error desconocido"}`,
+      );
+    }
+  }
 }
 
 export async function listMailTmMessages(
@@ -213,7 +275,8 @@ export async function listMailTmMessages(
     );
   }
 
-  const accessToken = await getAccessToken(emailAddress);
+  const provider = getProviderFromAccountToken(accountToken);
+  const accessToken = await getAccessToken(emailAddress, provider);
   const messages: MailTmMessage[] = [];
   let path = "/messages?page=1";
   let pageCount = 0;
@@ -226,7 +289,7 @@ export async function listMailTmMessages(
 
     const page = await requestJson<
       MailTmCollection<MailTmMessage> | MailTmMessage[]
-    >(path, {}, accessToken);
+    >(path, {}, accessToken, provider);
     if (Array.isArray(page)) {
       messages.push(...page);
       break;
@@ -240,7 +303,7 @@ export async function listMailTmMessages(
 
     const next = page["hydra:view"]?.["hydra:next"];
     if (next) {
-      const url = providerUrl(next);
+      const url = providerUrl(next, provider);
       path = `${url.pathname}${url.search}`;
     } else {
       if (
@@ -259,11 +322,14 @@ export async function listMailTmMessages(
 export async function getMailTmMessage(
   accessToken: string,
   messageId: string,
+  accountToken: string,
 ) {
+  const provider = getProviderFromAccountToken(accountToken);
   return requestJson<MailTmMessage>(
     `/messages/${encodeURIComponent(messageId)}`,
     {},
     accessToken,
+    provider,
   );
 }
 
@@ -271,7 +337,9 @@ export async function downloadMailTmAttachment(
   accessToken: string,
   messageId: string,
   attachment: MailTmAttachment,
+  accountToken: string,
 ) {
+  const provider = getProviderFromAccountToken(accountToken);
   if (!attachment.downloadUrl && !attachment.id) {
     throw new Error("Mail.tm no devolvió la ruta del adjunto.");
   }
@@ -286,13 +354,16 @@ export async function downloadMailTmAttachment(
   const headers = new Headers({
     Authorization: `Bearer ${accessToken}`,
   });
-  const response = await fetch(providerUrl(path), {
+  const response = await fetch(providerUrl(path, provider), {
     headers,
     cache: "no-store",
   });
 
   if (!response.ok) {
-    throw new Error(`Mail.tm: ${await getErrorMessage(response)}`);
+    const details = await getErrorMessage(response);
+    throw new Error(
+      `${provider} rechazó la descarga del adjunto: HTTP ${response.status}${details ? `: ${details}` : ""}`,
+    );
   }
 
   return {
@@ -309,14 +380,14 @@ export async function deleteMailTmMailbox(
   emailAddress: string,
   accountToken: string,
 ) {
-  const accountId = getAccountIdFromToken(accountToken);
-  if (!accountId) {
+  const account = getAccountFromToken(accountToken);
+  if (!account) {
     throw new Error("El identificador del buzón de Mail.tm no es válido.");
   }
 
-  const accessToken = await getAccessToken(emailAddress);
+  const accessToken = await getAccessToken(emailAddress, account.provider);
   const response = await fetch(
-    providerUrl(`/accounts/${encodeURIComponent(accountId)}`),
+    providerUrl(`/accounts/${encodeURIComponent(account.id)}`, account.provider),
     {
       method: "DELETE",
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -325,6 +396,9 @@ export async function deleteMailTmMailbox(
   );
 
   if (!response.ok) {
-    throw new Error(`Mail.tm: ${await getErrorMessage(response)}`);
+    const details = await getErrorMessage(response);
+    throw new Error(
+      `${account.provider} rechazó DELETE /accounts: HTTP ${response.status}${details ? `: ${details}` : ""}`,
+    );
   }
 }
