@@ -20,6 +20,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Temporary mailboxes
+
+The application creates and syncs temporary mailboxes through [Mail.tm](https://docs.mail.tm/). No Mail.tm API key is required, and `MAILSLURP_API_KEY` is no longer used. Set `MAILTM_PASSWORD_SECRET` to a stable, private value in local and Vercel environments; if it is not set, the app derives mailbox credentials from `JWT_SECRET`. Keep the selected secret unchanged while Mail.tm mailboxes are in use. The API has an 8-request-per-second limit per IP, and the app links to Mail.tm in its site footer as required by the provider.
+
+Mailboxes created with the former MailSlurp integration cannot be transferred to Mail.tm. Delete those records and create new mailboxes after deploying this version.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

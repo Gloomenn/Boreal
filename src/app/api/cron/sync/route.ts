@@ -50,12 +50,12 @@ export async function GET(request: NextRequest) {
         },
       );
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ [CRON] Error en cron sync:", error);
     return new Response(
       JSON.stringify({
         success: false,
-        error: error.message,
+        error: error instanceof Error ? error.message : "Error desconocido",
       }),
       {
         status: 500,

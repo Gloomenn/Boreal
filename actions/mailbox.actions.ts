@@ -6,17 +6,16 @@ import { getCurrentUser } from "@/actions/auth.actions";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { sendTelegramNotification } from "@/lib/notifications";
-
-// ============================================================
-//  CONFIGURACIÓN - MAILSLURP (con any para evitar errores de tipos)
-// ============================================================
-
-// Import dinámico para evitar problemas de tipos en tiempo de compilación
-const { MailSlurp } = require("mailslurp-client");
-
-const mailslurp = new MailSlurp({
-  apiKey: process.env.MAILSLURP_API_KEY || "",
-});
+import {
+  authenticateMailTmMailbox,
+  createMailTmMailbox,
+  deleteMailTmMailbox,
+  downloadMailTmAttachment,
+  getMailTmMessage,
+  isMailTmMailbox,
+  listMailTmMessages,
+  type MailTmMessage,
+} from "@/lib/mailtm";
 
 // ============================================================
 //  1. CREAR CORREO TEMPORAL
@@ -29,33 +28,37 @@ export async function createTemporaryMailbox(aliasName: string) {
       redirect("/login");
     }
 
-    // Crear un inbox temporal en MailSlurp
-    const inbox = await mailslurp.createInboxWithOptions({
-      description: `Buzón para: ${aliasName}`,
-    });
-
-    const fullEmail = inbox.emailAddress;
-    const inboxId = inbox.id;
-
-    console.log("📧 Correo creado con MailSlurp:", fullEmail);
-
-    const newMailbox = await prisma.mailbox.create({
-      data: {
-        aliasName: aliasName,
-        emailAddress: fullEmail,
-        apiToken: inboxId,
-        userId: user.id,
-        status: "active",
-      },
-    });
+    const inbox = await createMailTmMailbox();
+    let newMailbox;
+    try {
+      newMailbox = await prisma.mailbox.create({
+        data: {
+          aliasName,
+          emailAddress: inbox.emailAddress,
+          apiToken: inbox.accountToken,
+          userId: user.id,
+          status: "active",
+        },
+      });
+    } catch (databaseError) {
+      try {
+        await deleteMailTmMailbox(inbox.emailAddress, inbox.accountToken);
+      } catch (cleanupError) {
+        console.error("No se pudo limpiar el buzón Mail.tm recién creado:", cleanupError);
+      }
+      throw databaseError;
+    }
 
     revalidatePath("/dashboard");
     return { success: true, mailbox: newMailbox };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ Error creando mailbox:", error);
     return {
       success: false,
-      error: error.message || "Error desconocido al crear el correo",
+      error:
+        error instanceof Error
+          ? error.message
+          : "Error desconocido al crear el correo",
     };
   }
 }
@@ -97,9 +100,12 @@ export async function getMyMailboxes() {
     });
 
     return { success: true, data: mailboxes };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ Error obteniendo mailboxes:", error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error desconocido",
+    };
   }
 }
 
@@ -145,9 +151,12 @@ export async function getMailboxMessages(mailboxId: string) {
         messages,
       },
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ Error obteniendo mensajes:", error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error desconocido",
+    };
   }
 }
 
@@ -169,41 +178,21 @@ export async function syncMailboxInternal(mailboxId: string) {
       return { success: false, error: "Correo no encontrado o no autorizado" };
     }
 
-    const inboxId = mailbox.apiToken;
-    console.log("📡 Sincronizando inbox:", inboxId);
-
-    let emails: any[] = [];
-
-    // Intentar obtener los emails con el SDK de MailSlurp
-    try {
-      emails = await mailslurp.getEmails(inboxId);
-      console.log("✅ mailslurp.getEmails(inboxId) funcionó");
-    } catch (error1) {
-      console.warn("⚠️ Falló mailslurp.getEmails(inboxId):", error1);
-      try {
-        const response = await fetch(
-          `https://api.mailslurp.com/inboxes/${inboxId}/emails`,
-          {
-            headers: {
-              "x-api-key": process.env.MAILSLURP_API_KEY || "",
-            },
-          },
-        );
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        emails = data.content || data || [];
-        console.log("✅ Llamada directa a la API funcionó");
-      } catch (error2) {
-        console.error("❌ Falló la sincronización:", error2);
-        throw new Error(
-          "No se pudo obtener la lista de emails. Revisa la API Key de MailSlurp.",
-        );
-      }
+    if (!isMailTmMailbox(mailbox.apiToken)) {
+      return {
+        success: false,
+        error:
+          "Este buzón fue creado con MailSlurp y no se puede migrar. Crea un buzón nuevo con Mail.tm; conserva este si necesitas consultar los mensajes ya guardados.",
+      };
     }
 
-    if (!emails || emails.length === 0) {
+    console.log("📡 Sincronizando buzón Mail.tm:", mailbox.emailAddress);
+    const { accessToken, messages: emails } = await listMailTmMessages(
+      mailbox.emailAddress,
+      mailbox.apiToken,
+    );
+
+    if (emails.length === 0) {
       console.log("📭 No hay mensajes nuevos en este buzón");
       return {
         success: true,
@@ -220,8 +209,18 @@ export async function syncMailboxInternal(mailboxId: string) {
     let savedCount = 0;
 
     for (const emailSummary of emails) {
+      const emailId =
+        emailSummary.id ||
+        (typeof emailSummary["@id"] === "string"
+          ? emailSummary["@id"].split("/").filter(Boolean).at(-1)
+          : undefined);
+
+      if (!emailId) {
+        throw new Error("Mail.tm devolvió un mensaje sin identificador.");
+      }
+
       const existing = await prisma.message.findUnique({
-        where: { messageId: emailSummary.id },
+        where: { messageId: emailId },
       });
 
       // Si el mensaje ya existe y no está vacío, lo omitimos.
@@ -233,103 +232,62 @@ export async function syncMailboxInternal(mailboxId: string) {
           !existing.bodyHtml);
 
       if (!existing || isExistingEmpty) {
-        let fullEmail: any = null;
+        const fullEmail: MailTmMessage = await getMailTmMessage(
+          accessToken,
+          emailId,
+        );
 
-        // Obtener el email completo usando el SDK de MailSlurp
-        try {
-          fullEmail = await mailslurp.getEmail(emailSummary.id);
-        } catch (getError) {
-          console.warn("⚠️ Error al obtener detalle del email:", getError);
-        }
-
-        if (!fullEmail) {
-          console.error(
-            `❌ Error al obtener detalle del email ${emailSummary.id}`,
-          );
-          continue;
-        }
-
-        // 🔥 EXTRACCIÓN MEJORADA DEL CONTENIDO
-        let bodyText = "";
-        let bodyHtml = "";
-
-        const rawBody =
-          typeof fullEmail.body === "string" ? fullEmail.body : "";
-        const isHtml =
-          fullEmail.isHTML === true || /<[a-z][\s\S]*>/i.test(rawBody);
-
-        if (isHtml) {
-          bodyHtml =
-            rawBody ||
-            (typeof fullEmail.html === "string" ? fullEmail.html : "");
-          bodyText =
-            fullEmail.textExcerpt ||
-            fullEmail.bodyExcerpt ||
-            bodyHtml
-              .replace(/<[^>]*>/g, " ")
-              .replace(/\s+/g, " ")
-              .trim();
-        } else {
-          bodyText =
-            rawBody ||
-            fullEmail.textBody ||
-            fullEmail.text ||
-            fullEmail.bodyExcerpt ||
-            "";
-          bodyHtml =
-            (typeof fullEmail.html === "string" ? fullEmail.html : "") ||
-            (bodyText ? bodyText.replace(/\n/g, "<br>") : "");
-        }
-
-        // Respaldos si alguno sigue vacío
-        if (!bodyHtml && bodyText) {
-          bodyHtml = bodyText.replace(/\n/g, "<br>");
-        }
-        if (!bodyText && bodyHtml) {
-          bodyText = bodyHtml
-            .replace(/<[^>]*>/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-        }
+        const htmlBody = Array.isArray(fullEmail.html)
+          ? fullEmail.html.join("")
+          : typeof fullEmail.html === "string"
+            ? fullEmail.html
+            : "";
+        const bodyText =
+          fullEmail.text ||
+          fullEmail.intro ||
+          htmlBody.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+        const bodyHtml =
+          htmlBody ||
+          bodyText
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;")
+            .replace(/\n/g, "<br>");
 
         console.log(
           `📝 Contenido extraído: ${bodyText.length} caracteres de texto, ${bodyHtml.length} caracteres de HTML`,
         );
 
-        // Obtener el remitente
         let from = "Desconocido";
         if (fullEmail.from) {
           if (typeof fullEmail.from === "string") {
             from = fullEmail.from;
-          } else if (fullEmail.from.address) {
-            from = fullEmail.from.address;
-          } else if (fullEmail.from.emailAddress) {
-            from = fullEmail.from.emailAddress;
-          }
-        } else if (emailSummary.from) {
-          if (typeof emailSummary.from === "string") {
-            from = emailSummary.from;
-          } else if (emailSummary.from.address) {
-            from = emailSummary.from.address;
+          } else {
+            from =
+              fullEmail.from.address ||
+              fullEmail.from.name ||
+              "Desconocido";
           }
         }
 
-        // Verificar si tiene adjuntos
         const hasAttachments =
-          Array.isArray(fullEmail.attachments) &&
-          fullEmail.attachments.length > 0;
+          fullEmail.hasAttachments === true ||
+          (Array.isArray(fullEmail.attachments) &&
+            fullEmail.attachments.length > 0);
+        const subject = fullEmail.subject || emailSummary.subject || "Sin asunto";
 
         if (existing) {
           // Actualizar mensaje previamente incompleto
           await prisma.message.update({
             where: { id: existing.id },
             data: {
-              from: from || "Desconocido",
-              subject:
-                fullEmail.subject || emailSummary.subject || "Sin asunto",
+              from,
+              subject,
               bodyText: bodyText || "Sin contenido",
-              bodyHtml: bodyHtml || bodyText || "",
-              hasAttachments: hasAttachments,
+              bodyHtml,
+              hasAttachments,
             },
           });
           savedCount++;
@@ -338,16 +296,13 @@ export async function syncMailboxInternal(mailboxId: string) {
           await prisma.message.create({
             data: {
               mailboxId: mailbox.id,
-              messageId: fullEmail.id || emailSummary.id,
-              from: from || "Desconocido",
-              subject:
-                fullEmail.subject || emailSummary.subject || "Sin asunto",
+              messageId: emailId,
+              from,
+              subject,
               bodyText: bodyText || "Sin contenido",
-              bodyHtml: bodyHtml || bodyText || "",
-              hasAttachments: hasAttachments,
-              receivedAt: new Date(
-                fullEmail.createdAt || emailSummary.createdAt || Date.now(),
-              ),
+              bodyHtml,
+              hasAttachments,
+              receivedAt: new Date(fullEmail.createdAt || Date.now()),
             },
           });
 
@@ -357,8 +312,8 @@ export async function syncMailboxInternal(mailboxId: string) {
               process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
             const notificationMessage = `
 📨 <b>Nuevo correo recibido</b>
-📌 <b>De:</b> ${from || "Desconocido"}
-📎 <b>Asunto:</b> ${fullEmail.subject || emailSummary.subject || "Sin asunto"}
+📌 <b>De:</b> ${from}
+📎 <b>Asunto:</b> ${subject}
 ${hasAttachments ? "📎 <b>Adjuntos:</b> Sí" : ""}
 📝 <b>Contenido:</b> ${(bodyText || "").substring(0, 200)}${(bodyText || "").length > 200 ? "..." : ""}
 🔗 <a href="${appUrl}/dashboard/${mailboxId}">Ver en la aplicación</a>`;
@@ -382,9 +337,12 @@ ${hasAttachments ? "📎 <b>Adjuntos:</b> Sí" : ""}
       total: emails.length,
       mailbox: mailbox.emailAddress,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ Error sincronizando mailbox:", error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error desconocido",
+    };
   }
 }
 
@@ -427,33 +385,39 @@ export async function syncAllMailboxesInternal() {
       return { success: true, message: "No hay correos para sincronizar" };
     }
 
-    const results = await Promise.all(
-      mailboxes.map(async (mb: { id: string; emailAddress: string }) => {
-        const result = await syncMailboxInternal(mb.id);
-        return {
-          email: mb.emailAddress,
-          ...result,
-        };
-      }),
-    );
+    const results: Array<{
+      email: string;
+      success: boolean;
+      saved?: number;
+      total?: number;
+      mailbox?: string;
+      error?: string;
+    }> = [];
+    for (const mailbox of mailboxes) {
+      const result = await syncMailboxInternal(mailbox.id);
+      results.push({ email: mailbox.emailAddress, ...result });
+    }
 
-    const totalSaved = results.reduce(
-      (sum: number, r: any) => sum + (r.saved || 0),
-      0,
-    );
-    const totalErrors = results.filter((r: any) => !r.success).length;
+    const totalSaved = results.reduce((sum, result) => sum + (result.saved || 0), 0);
+    const totalErrors = results.filter((result) => !result.success).length;
 
     revalidatePath("/dashboard");
 
     return {
       success: true,
-      message: `Sincronización completada. ${totalSaved} mensajes nuevos guardados.`,
+      message:
+        totalErrors === 0
+          ? `Sincronización completada. ${totalSaved} mensajes nuevos guardados.`
+          : `Sincronización completada con ${totalErrors} error(es). Los buzones MailSlurp no se pueden migrar; crea buzones nuevos y conserva los antiguos si necesitas consultar su historial.`,
       details: results,
       errors: totalErrors,
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ Error sincronizando todos los mailboxes:", error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error desconocido",
+    };
   }
 }
 
@@ -465,9 +429,12 @@ export async function syncAllMailboxes() {
     }
 
     return await syncAllMailboxesInternal();
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ Error sincronizando todos los mailboxes:", error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error desconocido",
+    };
   }
 }
 
@@ -507,56 +474,45 @@ export async function downloadAttachment(messageId: string, mailboxId: string) {
       return new Response("Mensaje no encontrado", { status: 404 });
     }
 
-    // Obtener el email completo usando el SDK de MailSlurp
-    const fullEmail = await mailslurp.getEmail(message.messageId);
+    if (!isMailTmMailbox(mailbox.apiToken)) {
+      return new Response(
+        "Los adjuntos de este buzón MailSlurp ya no están disponibles en la integración actual.",
+        { status: 409 },
+      );
+    }
+
+    const accessToken = await authenticateMailTmMailbox(
+      mailbox.emailAddress,
+      mailbox.apiToken,
+    );
+    const fullEmail = await getMailTmMessage(accessToken, message.messageId);
 
     if (
-      !fullEmail ||
       !Array.isArray(fullEmail.attachments) ||
       fullEmail.attachments.length === 0
     ) {
       return new Response("Este mensaje no tiene adjuntos", { status: 404 });
     }
 
-    const attachmentId = fullEmail.attachments[0];
+    const attachment = await downloadMailTmAttachment(
+      accessToken,
+      message.messageId,
+      fullEmail.attachments[0],
+    );
+    const safeFilename = attachment.filename.replace(/[\r\n"\\]/g, "_");
 
-    let fileName = "adjunto.pdf";
-    let contentType = "application/octet-stream";
-
-    try {
-      const meta = await mailslurp.emailController.getAttachmentMetaData({
-        attachmentId,
-        emailId: message.messageId,
-      });
-      if (meta?.name) fileName = meta.name;
-      if (meta?.contentType) contentType = meta.contentType;
-    } catch (metaErr) {
-      console.warn("⚠️ No se pudo obtener metadatos del adjunto:", metaErr);
-    }
-
-    const downloadDto =
-      await mailslurp.emailController.downloadAttachmentBase64({
-        attachmentId,
-        emailId: message.messageId,
-      });
-
-    if (!downloadDto || !downloadDto.base64FileContents) {
-      return new Response("Error al descargar el contenido del adjunto", {
-        status: 500,
-      });
-    }
-
-    const fileBuffer = Buffer.from(downloadDto.base64FileContents, "base64");
-
-    return new Response(fileBuffer, {
+    return new Response(attachment.content, {
       headers: {
-        "Content-Disposition": `attachment; filename="${encodeURIComponent(fileName)}"`,
-        "Content-Type": downloadDto.contentType || contentType,
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
+        "Content-Type": attachment.contentType,
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("❌ Error descargando adjunto:", error);
-    return new Response(`Error: ${error.message}`, { status: 500 });
+    return new Response(
+      `Error: ${error instanceof Error ? error.message : "Error desconocido"}`,
+      { status: 500 },
+    );
   }
 }
 
@@ -582,14 +538,12 @@ export async function deleteMailbox(mailboxId: string) {
       return { success: false, error: "Correo no encontrado o no autorizado" };
     }
 
-    try {
-      const inboxId = mailbox.apiToken;
-      await mailslurp.deleteInbox(inboxId);
-      console.log(`🗑️ Inbox eliminado de MailSlurp: ${mailbox.emailAddress}`);
-    } catch (deleteError) {
-      console.error(
-        "Error eliminando de MailSlurp (continuando localmente):",
-        deleteError,
+    const isMailTm = isMailTmMailbox(mailbox.apiToken);
+    if (isMailTm) {
+      await deleteMailTmMailbox(mailbox.emailAddress, mailbox.apiToken);
+    } else {
+      console.warn(
+        `El buzón antiguo ${mailbox.emailAddress} no puede eliminarse en MailSlurp desde esta versión.`,
       );
     }
 
@@ -598,9 +552,17 @@ export async function deleteMailbox(mailboxId: string) {
     });
 
     revalidatePath("/dashboard");
-    return { success: true, message: "Buzón eliminado correctamente" };
-  } catch (error: any) {
+    return {
+      success: true,
+      message: isMailTm
+        ? "Buzón eliminado correctamente"
+        : "Buzón y mensajes locales eliminados. El buzón anterior de MailSlurp puede seguir existiendo en ese servicio.",
+    };
+  } catch (error: unknown) {
     console.error("❌ Error eliminando buzón:", error);
-    return { success: false, error: error.message };
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Error desconocido",
+    };
   }
 }

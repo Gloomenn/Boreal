@@ -30,7 +30,20 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <footer className="border-t border-slate-200 bg-white px-4 py-3 text-center text-xs text-slate-600">
+          Correo temporal proporcionado por{" "}
+          <a
+            href="https://mail.tm/"
+            target="_blank"
+            rel="noreferrer"
+            className="font-medium text-purple-700 underline"
+          >
+            Mail.tm
+          </a>
+        </footer>
+      </body>
     </html>
   );
 }

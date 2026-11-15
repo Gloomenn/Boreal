@@ -17,8 +17,11 @@ export async function GET(
     
     // Si no, devolvemos un error genérico
     return new Response("Error al descargar el archivo", { status: 500 });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error en API download:", error);
-    return new Response(`Error: ${error.message}`, { status: 500 });
+    return new Response(
+      `Error: ${error instanceof Error ? error.message : "Error desconocido"}`,
+      { status: 500 },
+    );
   }
 }
